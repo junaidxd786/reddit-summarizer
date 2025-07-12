@@ -1,0 +1,6 @@
+Flask
+praw
+requests
+python-dotenv
+vaderSentiment
+flask-caching

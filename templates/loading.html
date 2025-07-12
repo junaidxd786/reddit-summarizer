@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Processing...</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: 'Roboto', Arial, sans-serif; background: #f6f7f8; }
+        .container { max-width: 500px; margin: 100px auto; background: #fff; padding: 2em; border-radius: 16px; box-shadow: 0 4px 24px #0002; text-align: center; }
+        .spinner { margin: 2em auto; border: 6px solid #f3f3f3; border-top: 6px solid #0079d3; border-radius: 50%; width: 48px; height: 48px; animation: spin 1s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .fun-fact { margin-top: 2em; font-size: 1.1em; color: #0079d3; font-style: italic; min-height: 2.5em; display: flex; align-items: center; justify-content: center; }
+    </style>
+    <script>
+    setInterval(function() {
+        fetch("/result_ready/{{ job_id }}").then(r => r.json()).then(data => {
+            if (data.ready) {
+                window.location.href = "/result/{{ job_id }}";
+            }
+        });
+    }, 2000);
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>Processing...</h1>
+        <div class="spinner"></div>
+        <p>This may take a few seconds for long threads.</p>
+    </div>
+</body>
+</html>

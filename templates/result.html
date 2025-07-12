@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Reddit Thread Summarizer - Results</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Roboto', Arial, sans-serif; margin: 0; background: #f6f7f8; }
+        .container { max-width: 700px; margin: 40px auto; background: #fff; padding: 2em 1.5em; border-radius: 16px; box-shadow: 0 4px 24px #0002; }
+        h1 { text-align: center; font-size: 2.2em; font-weight: 700; letter-spacing: 1px; margin-bottom: 1.2em; }
+        .section { background: #f9fafb; border-radius: 12px; box-shadow: 0 2px 8px #0001; margin-top: 2em; padding: 1.2em 1em; position: relative; }
+        .section h2 { margin-top: 0; font-size: 1.3em; display: flex; align-items: center; gap: 0.5em; }
+        .sentiment { background: #e6ffe6; border-left: 6px solid #2ecc40; }
+        .summary { background: #f0f0f0; border-left: 6px solid #0079d3; white-space: pre-wrap; }
+        .top-comments { background: #e8f4fd; border-left: 6px solid #0079d3; }
+        .links { background: #fffbe8; border-left: 6px solid #f1c40f; }
+        .links ul, .links li { word-break: break-all; }
+        .faqs { background: #f3e8fd; border-left: 6px solid #a259e6; }
+        .experts { background: #e8fdf3; border-left: 6px solid #00b894; }
+        .funny { background: #fff0f6; border-left: 6px solid #d3007f; }
+        .action-items { background: #e8f7ff; border-left: 6px solid #00bcd4; }
+        .key-facts { background: #f7ffe8; border-left: 6px solid #27ae60; }
+        .score { color: #0079d3; font-weight: bold; }
+        .faqs .score { color: #a259e6; }
+        .experts .score { color: #00b894; }
+        .funny .score { color: #d3007f; }
+        .action-items, .key-facts { font-size: 1.05em; }
+        .flair { color: #008060; font-weight: bold; margin-right: 0.5em; }
+        .top-comment, .expert-comment, .funny-comment { margin-bottom: 1.2em; }
+        ul { padding-left: 1.2em; margin-top: 0.5em; }
+        li { margin-bottom: 0.5em; }
+        .did-you-know { margin-top: 2em; font-size: 1.1em; color: #a259e6; font-style: italic; text-align: center; }
+        .copy-btn { position: absolute; top: 1.2em; right: 1.2em; background: #f1c40f; color: #222; border: none; border-radius: 6px; padding: 0.6em 1.2em; font-size: 1.1em; font-weight: 700; cursor: pointer; transition: background 0.2s; min-width: 44px; min-height: 44px; }
+        .copy-btn:hover { background: #f39c12; }
+        .copy-tooltip { display: none; position: absolute; top: 0.2em; right: 6.5em; background: #222; color: #fff; padding: 0.2em 0.7em; border-radius: 4px; font-size: 0.9em; z-index: 10; white-space: nowrap; }
+        .show-tooltip { display: inline-block !important; }
+        .back-btn { display: block; margin: 2em auto 0 auto; background: #0079d3; color: #fff; border: none; border-radius: 6px; padding: 1em 2em; font-size: 1.2em; font-weight: 700; cursor: pointer; text-align: center; text-decoration: none; transition: background 0.2s; min-width: 44px; min-height: 44px; }
+        .back-btn:hover { background: #005fa3; }
+        a { word-break: break-all; }
+        @media (max-width: 800px) {
+            .container { max-width: 100vw; padding: 1em 0.5em; border-radius: 0; box-shadow: none; }
+            h1 { font-size: 1.4em; }
+            .section { padding: 1em 0.3em; margin-top: 1.2em; border-radius: 8px; }
+            .section h2 { font-size: 1.1em; }
+            .copy-btn { position: static; margin: 0.5em 0 0 0; display: block; width: 100%; font-size: 1.1em; min-width: 44px; min-height: 44px; }
+            .copy-tooltip { position: static; display: block; margin: 0.2em 0; left: auto; right: auto; }
+            .back-btn { width: 100%; font-size: 1.1em; min-width: 44px; min-height: 44px; }
+            ul { padding-left: 1em; }
+            li { font-size: 1em; }
+        }
+        @media (max-width: 500px) {
+            .container { padding: 0.5em 0.1em; }
+            h1 { font-size: 1.1em; }
+            .section { padding: 0.7em 0.1em; }
+            .section h2 { font-size: 1em; }
+            .back-btn, .copy-btn { font-size: 1em; padding: 0.7em 0.5em; }
+        }
+    </style>
+    <script>
+    function copySection(id, btn) {
+        var el = document.getElementById(id);
+        var textToCopy = el.innerText || el.textContent;
+        navigator.clipboard.writeText(textToCopy).then(function() {
+            var tooltip = btn.nextElementSibling;
+            tooltip.classList.add('show-tooltip');
+            setTimeout(function(){ tooltip.classList.remove('show-tooltip'); }, 1200);
+        }).catch(err => {
+            console.error('Failed to copy text: ', err);
+            alert('Failed to copy text. Please copy manually.');
+        });
+    }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>🦾 Reddit Thread Summary</h1>
+        <p style="text-align: center;"><a href="{{ result.thread_url }}" target="_blank">View Original Thread</a></p>
+        {% if result.sentiment_verdict %}
+            <div class="section sentiment" id="sentiment-section">
+                <button class="copy-btn" onclick="copySection('sentiment-section', this)">📋 Copy</button>
+                <span class="copy-tooltip">Copied!</span>
+                <h2>💬 Sentiment</h2><p>{{ result.sentiment_verdict }}</p>
+            </div>
+        {% endif %}
+        {% if result.summary %}
+            <div class="section summary" id="summary-section">
+                <button class="copy-btn" onclick="copySection('summary-section', this)">📋 Copy</button>
+                <span class="copy-tooltip">Copied!</span>
+                <h2>📝 Summary</h2><p>{{ result.summary }}</p>
+            </div>
+        {% endif %}
+        {% if result.top_comments %}
+            <div class="section top-comments" id="top-comments-section">
+                <button class="copy-btn" onclick="copySection('top-comments-section', this)">📋 Copy</button>
+                <span class="copy-tooltip">Copied!</span>
+                <h2>🏅 Top 3 Most Upvoted Comments</h2>
+                <ul>
+                {% for comment, score in result.top_comments %}
+                    <li><span class="score">▲ {{ score }}</span> {{ comment }}</li>
+                {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+        <div class="section links" id="links-section">
+            <button class="copy-btn" onclick="copySection('links-section', this)">📋 Copy</button>
+            <span class="copy-tooltip">Copied!</span>
+            <h2>🔗 All Important Links</h2>
+            {% if result.links and result.links|length > 0 %}
+            <ul>
+                {% for link in result.links %}
+                    <li><a href="{{ link }}" target="_blank">{{ link }}</a></li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p>No links found.</p>
+            {% endif %}
+        </div>
+        {% if result.faqs %}
+            <div class="section faqs" id="faqs-section">
+                <button class="copy-btn" onclick="copySection('faqs-section', this)">📋 Copy</button>
+                <span class="copy-tooltip">Copied!</span>
+                <h2>❓ Top FAQs</h2>
+                <ul>
+                    {% for question, score in result.faqs %}
+                        <li><span class="score">▲ {{ score }}</span> {{ question }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+        {% if result.expert_opinions %}
+            <div class="section experts" id="experts-section">
+                <button class="copy-btn" onclick="copySection('experts-section', this)">📋 Copy</button>
+                <span class="copy-tooltip">Copied!</span>
+                <h2>🎓 Expert Opinions</h2>
+                <ul>
+                {% for comment, score, flair in result.expert_opinions %}
+                    <li><span class="flair">[{{ flair }}]</span> <span class="score">▲ {{ score }}</span> {{ comment }}</li>
+                {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+        {% if result.funny_comments %}
+            <div class="section funny" id="funny-section">
+                <button class="copy-btn" onclick="copySection('funny-section', this)">📋 Copy</button>
+                <span class="copy-tooltip">Copied!</span>
+                <h2>😂 Funny Highlights</h2>
+                <ul>
+                {% for comment, score in result.funny_comments %}
+                    <li><span class="score">▲ {{ score }}</span> {{ comment }}</li>
+                {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+        <div class="section action-items" id="action-items-section">
+            <button class="copy-btn" onclick="copySection('action-items-section', this)">📋 Copy</button>
+            <span class="copy-tooltip">Copied!</span>
+            <h2>🗒️ Action Items & Important Notes</h2>
+            {% if action_items_html %}
+                {{ action_items_html|safe }}
+            {% else %}
+                <p>No action items found.</p>
+            {% endif %}
+        </div>
+        <div class="section key-facts" id="key-facts-section">
+            <button class="copy-btn" onclick="copySection('key-facts-section', this)">📋 Copy</button>
+            <span class="copy-tooltip">Copied!</span>
+            <h2>📌 Key Facts</h2>
+            {% if key_facts_html %}
+                {{ key_facts_html|safe }}
+            {% else %}
+                <p>No key facts found.</p>
+            {% endif %}
+        </div>
+        <a href="/" class="back-btn">⬅️ Enter a New Link</a>
+    </div>
+</body>
+</html>
