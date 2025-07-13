@@ -126,7 +126,7 @@
             height: 100%;
             background: linear-gradient(90deg, #0079d3 0%, #36d1c4 100%);
             border-radius: 16px;
-            transition: width 0.6s cubic-bezier(.4,2,.3,1);
+            transition: width 1.2s cubic-bezier(.4,2,.3,1);
             /* Remove text styling */
             font-size: 0;
             color: transparent;
@@ -258,12 +258,12 @@
                 margin-bottom: 0.3em;
             }
             .fun-fact-card {
-                margin: 0.1em auto 1.1em auto;
+                margin: 0.1em auto 0.4em auto;
             }
             .section-cards {
                 flex-direction: column;
                 gap: 0.3em;
-                margin-top: 0.1em;
+                margin-top: 0;
                 margin-bottom: 0.5em;
             }
             .section-card {
@@ -282,6 +282,7 @@
             .progress-bar {
                 border-radius: 1.1rem;
                 height: 100%;
+                transition: width 1.2s cubic-bezier(.4,2,.3,1);
             }
             .fun-fact-card {
                 margin: 0.1em auto 1.7em auto;
@@ -355,7 +356,7 @@
                 </div>
             </div>
             <div class="progress-bar-container">
-                <div class="progress-bar" id="progressBar" style="width: 5%;"></div>
+                <div class="progress-bar" id="progressBar"></div>
             </div>
         </div>
         <!-- Remove the Cancel button HTML -->
@@ -452,8 +453,11 @@
                         currentSection++;
                         setTimeout(animateSection, 1200);
                     } else if (currentSection === sectionCount - 2) {
-                        currentSection++;
-                        setTimeout(animateSection, 1200); // Delay before finalizing
+                        // Delay after Extracting Insights, before showing Finalizing
+                        setTimeout(() => {
+                            currentSection++;
+                            animateSection();
+                        }, 1400);
                     } else {
                         // After last step, immediately try to redirect to result page (no spinner, no extra delay)
                         for (let i = 0; i < sectionCount; i++) {
@@ -462,7 +466,7 @@
                             card.classList.add('completed');
                         }
                         progressBar.style.width = '100%';
-                        // Instantly check for result and redirect
+                        // Instantly check for result and redirect (no delay)
                         fetch(`/result/${jobId}`, { method: 'HEAD' })
                             .then(r => {
                                 if (r.status === 200) {
