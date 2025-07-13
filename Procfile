@@ -1,1 +1,1 @@
-web: gunicorn reddit:app
+web: gunicorn reddit:app --workers 2 --threads 2 --preload --timeout 60

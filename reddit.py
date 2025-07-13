@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 import functools
 
 load_dotenv()
+startup_start = time.time()
 
 # Circuit Breaker Implementation
 class CircuitState(Enum):
@@ -127,16 +128,41 @@ if not GEMINI_API_KEY:
     logging.error("Missing Gemini API key. Please set GEMINI_API_KEY in your .env file.")
     # Optionally: sys.exit(1)
 
-try:
-    reddit = praw.Reddit(
-        client_id=REDDIT_CLIENT_ID,
-        client_secret=REDDIT_CLIENT_SECRET,
-        user_agent=REDDIT_USER_AGENT
-    )
-    logging.info("PRAW initialized successfully.")
-except Exception as e:
-    logging.error(f"Failed to initialize PRAW: {e}. Check your Reddit API credentials and user agent.")
-    reddit = None
+# Lazy initialization for PRAW
+
+def get_reddit():
+    t0 = time.time()
+    if not hasattr(get_reddit, "instance"):
+        import praw
+        get_reddit.instance = praw.Reddit(
+            client_id=REDDIT_CLIENT_ID,
+            client_secret=REDDIT_CLIENT_SECRET,
+            user_agent=REDDIT_USER_AGENT
+        )
+        print("get_reddit() cold init time:", time.time() - t0)
+    return get_reddit.instance
+
+# Lazy initialization for SentimentIntensityAnalyzer
+
+def get_sentiment_analyzer():
+    t0 = time.time()
+    if not hasattr(get_sentiment_analyzer, "instance"):
+        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+        get_sentiment_analyzer.instance = SentimentIntensityAnalyzer()
+        print("get_sentiment_analyzer() cold init time:", time.time() - t0)
+    return get_sentiment_analyzer.instance
+
+# Remove top-level PRAW initialization
+# try:
+#     reddit = praw.Reddit(
+#         client_id=REDDIT_CLIENT_ID,
+#         client_secret=REDDIT_CLIENT_SECRET,
+#         user_agent=REDDIT_USER_AGENT
+#     )
+#     logging.info("PRAW initialized successfully.")
+# except Exception as e:
+#     logging.error(f"Failed to initialize PRAW: {e}. Check your Reddit API credentials and user agent.")
+#     reddit = None
 
 
 app = Flask(__name__)
@@ -158,11 +184,13 @@ def remove_urls(text):
 
 def get_random_trending_thread_url():
     """Fetches a random trending Reddit thread URL."""
+    reddit = get_reddit()
     if not reddit: # Check if PRAW was initialized
         logging.error("Reddit PRAW not initialized, cannot fetch trending threads.")
         return None
     
     def _fetch_trending_thread():
+        reddit = get_reddit()
         if not reddit:
             raise Exception("Reddit PRAW not initialized")
         subreddit = reddit.subreddit("popular")
@@ -183,12 +211,16 @@ def get_random_trending_thread_url():
 def fetch_post_and_comments(thread_url, limit=5, sort='top'):
     """Fetches the main post text and the most relevant comments from a Reddit thread.
     sort: 'top' (most upvoted), 'best', or 'controversial'"""
+    reddit = get_reddit()
     if not reddit: # Check if PRAW was initialized
         raise ValueError("Reddit PRAW not initialized, cannot fetch post and comments.")
 
     def _fetch_post_and_comments():
+        reddit = get_reddit()
         if not reddit:
             raise Exception("Reddit PRAW not initialized")
+        import praw
+        from praw.models import Comment
         submission = reddit.submission(url=thread_url)
         # Set the comment sort order
         if sort == 'best':
@@ -419,7 +451,7 @@ def extract_links(texts):
 
 def analyze_sentiment(comments):
     """Analyzes the sentiment of comments and returns score, breakdown, and verdict."""
-    analyzer = SentimentIntensityAnalyzer()
+    analyzer = get_sentiment_analyzer()
     scores = [analyzer.polarity_scores(text[0])['compound'] for text in comments if text[0].strip()]
     avg_score = sum(scores) / len(scores) if scores else 0
     
@@ -455,11 +487,13 @@ def extract_faqs(comments, max_faqs=5):
 
 def extract_expert_opinions(thread_url, limit=50): # Reduced limit for consistency
     """Extracts comments from users with specific 'expert' flairs."""
+    reddit = get_reddit()
     if not reddit: # Check if PRAW was initialized
         logging.error("Reddit PRAW not initialized, cannot extract expert opinions.")
         return []
     
     def _extract_expert_opinions():
+        reddit = get_reddit()
         if not reddit:
             raise Exception("Reddit PRAW not initialized")
         submission = reddit.submission(url=thread_url)
@@ -575,10 +609,12 @@ def set_progress(job_id, step_idx, extra_label=None):
     }, timeout=600)
 
 def get_trending_threads(limit=5):
+    reddit = get_reddit()
     if not reddit:
         logging.error("Reddit PRAW not initialized, cannot fetch trending threads.")
         return []
     def _fetch_trending_threads():
+        reddit = get_reddit()
         if not reddit:
             raise Exception("Reddit PRAW not initialized")
         subreddit = reddit.subreddit("popular")
@@ -676,11 +712,13 @@ def background_summarize(job_id, thread_url, language="en", summary_length="medi
 
 def get_trending_subreddits(limit=5):
     """Fetches a list of trending subreddits."""
+    reddit = get_reddit()
     if not reddit: # Check if PRAW was initialized
         logging.error("Reddit PRAW not initialized, cannot fetch trending subreddits.")
         return []
     
     def _fetch_trending_subreddits():
+        reddit = get_reddit()
         if not reddit:
             raise Exception("Reddit PRAW not initialized")
         return [sub.display_name for sub in reddit.subreddits.popular(limit=limit)]
@@ -773,7 +811,7 @@ def status():
     return jsonify({
         'reddit_circuit_breaker': reddit_circuit_breaker.get_status(),
         'gemini_circuit_breaker': gemini_circuit_breaker.get_status(),
-        'reddit_initialized': reddit is not None,
+        'reddit_initialized': reddit_circuit_breaker.get_status()['state'] != CircuitState.OPEN.value, # Check if PRAW is initialized
         'gemini_api_keys': {
             'total_available': available_keys,
             'current_key_index': current_key_index,
@@ -802,4 +840,5 @@ def favicon():
     return redirect('https://www.redditstatic.com/desktop2x/img/favicon/apple-icon-180x180.png')
 
 if __name__ == '__main__':
+    print("App import and setup time:", time.time() - startup_start)
     app.run(debug=True)
