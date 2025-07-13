@@ -1,1 +1,1 @@
-web: python reddit.py
+web: gunicorn reddit:app

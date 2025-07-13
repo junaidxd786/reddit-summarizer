@@ -4,354 +4,525 @@
     <meta charset="UTF-8">
     <title>Processing...</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
-        html, body { 
-            font-family: 'Roboto', Arial, sans-serif; 
-            background: #f6f7f8; 
-            overflow: hidden;
-            height: 100%;
+        html, body {
+            font-family: 'Roboto', Arial, sans-serif;
+            background: linear-gradient(135deg, #e9eefd 0%, #f6f7fa 100%);
+            min-height: 100vh;
             margin: 0;
             padding: 0;
-        }
-        .container { 
-            max-width: 500px; 
-            margin: 50px auto; 
-            background: #fff; 
-            padding: 2em; 
-            border-radius: 16px; 
-            box-shadow: 0 4px 24px #0002; 
-            text-align: center; 
-        }
-        .spinner { margin: 2em auto; border: 6px solid #f3f3f3; border-top: 6px solid #0079d3; border-radius: 50%; width: 48px; height: 48px; animation: spin 1s linear infinite; }
-        @keyframes spin { 100% { transform: rotate(360deg); } }
-        .fun-fact { 
-            margin-top: 1.5em; 
-            font-size: 0.95em; 
-            color: #0079d3; 
-            font-style: italic; 
-            min-height: 2em; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center;
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-            border-radius: 8px;
-            padding: 1em;
-            border-left: 3px solid #0079d3;
-            box-shadow: 0 2px 6px rgba(0, 121, 211, 0.1);
-            position: relative;
             overflow: hidden;
         }
-        
-        .fun-fact::before {
-            content: '💡';
-            position: absolute;
-            left: 12px;
-            top: 50%;
-            transform: translateY(-50%);
-            font-size: 1em;
-            opacity: 0.7;
-        }
-        
-        .fun-fact-content {
-            margin-left: 2em;
-            text-align: center;
-            line-height: 1.3;
-            font-weight: 500;
-        }
-        
-        .fun-fact.fade-in {
-            animation: fadeInUp 0.6s ease-out;
-        }
-        
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        .fun-fact.fade-out {
-            animation: fadeOutDown 0.4s ease-in;
-        }
-        
-        @keyframes fadeOutDown {
-            from {
-                opacity: 1;
-                transform: translateY(0);
-            }
-            to {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-        }
-        .footer { 
-            position: fixed; 
-            bottom: 0; 
-            left: 0; 
-            right: 0; 
-            background: #f8f9fa; 
-            text-align: center; 
-            padding: 10px; 
-            border-top: 1px solid #dee2e6;
-            font-size: 0.9em;
-            color: #6c757d;
-        }
-        @media (max-width: 600px) {
-            .container { max-width: 98vw; margin: 20px auto; padding: 1em 0.5em; border-radius: 10px; }
-            h1 { font-size: 1.3em; }
-            .spinner { width: 36px; height: 36px; border-width: 4px; }
-            .fun-fact { font-size: 1em; min-height: 2em; }
-            .progress { height: 1.1rem !important; }
-            .progress-bar { font-size: 0.9rem !important; }
-        }
-    </style>
-    <script>
-    setInterval(function() {
-        fetch("/result_ready/{{ job_id }}").then(r => r.json()).then(data => {
-            if (data.ready) {
-                window.location.href = "/result/{{ job_id }}";
-            }
-        });
-    }, 2000);
-    </script>
-</head>
-<body>
-    <div class="container">
-        <h1 class="text-center mb-4">Processing...</h1>
-        <div class="spinner"></div>
-        
-        <!-- Progress Steps -->
-        <div class="progress-steps mb-4">
-            <div class="step active" id="step-fetching">
-                <div class="step-icon">1</div>
-                <div class="step-text">Fetching Thread</div>
-            </div>
-            <div class="step" id="step-analyzing">
-                <div class="step-icon">2</div>
-                <div class="step-text">Analyzing Content</div>
-            </div>
-            <div class="step" id="step-summarizing">
-                <div class="step-icon">3</div>
-                <div class="step-text">Generating Summary</div>
-            </div>
-        </div>
-        
-        <div class="progress my-4" style="height: 1.5rem;">
-            <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 33%; font-size: 1rem;" id="progressBar">Step 1 of 3</div>
-        </div>
-        
-        <div class="text-center mb-3">
-            <button class="btn btn-outline-danger" onclick="cancelProcessing()">Cancel</button>
-        </div>
-        
-        <div class="fun-fact" id="fun-fact">
-            <div class="fun-fact-content">Did you know? Reddit was founded in 2005!</div>
-        </div>
-    </div>
-    
-    <!-- Footer -->
-    <div class="footer">
-        Powered by Junaid
-    </div>
-    
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-    let currentStep = 1;
-    let startTime = Date.now();
-    let cancelled = false;
-    
-    // Progress simulation
-    function updateProgress() {
-        if (cancelled) return;
-        
-        const progressBar = document.getElementById('progressBar');
-        
-        if (currentStep === 1) {
-            progressBar.style.width = '33%';
-            progressBar.textContent = 'Step 1 of 3';
-            document.getElementById('step-fetching').classList.add('active');
-        } else if (currentStep === 2) {
-            progressBar.style.width = '66%';
-            progressBar.textContent = 'Step 2 of 3';
-            document.getElementById('step-analyzing').classList.add('active');
-        } else if (currentStep === 3) {
-            progressBar.style.width = '100%';
-            progressBar.textContent = 'Step 3 of 3';
-            document.getElementById('step-summarizing').classList.add('active');
-        }
-    }
-    
-    function cancelProcessing() {
-        cancelled = true;
-        if (confirm('Are you sure you want to cancel? This will stop the processing.')) {
-            window.location.href = '/';
-        } else {
-            cancelled = false;
-        }
-    }
-    
-    // Simulate progress steps
-    setTimeout(() => {
-        if (!cancelled) {
-            currentStep = 2;
-            updateProgress();
-        }
-    }, 3000);
-    
-    setTimeout(() => {
-        if (!cancelled) {
-            currentStep = 3;
-            updateProgress();
-        }
-    }, 8000);
-    
-    // Check if result is ready
-    setInterval(function() {
-        if (cancelled) return;
-        
-        fetch("/result_ready/{{ job_id }}").then(r => r.json()).then(data => {
-            if (data.ready) {
-                window.location.href = "/result/{{ job_id }}";
-            }
-        });
-    }, 2000);
-    
-    // Initialize progress
-    updateProgress();
-    
-    // Fun facts rotation
-    const facts = [
-        "Did you know? Reddit was founded in 2005!",
-        "Reddit is sometimes called 'the front page of the internet.'",
-        "There are over 100,000 active subreddits!",
-        "The Reddit alien mascot is named 'Snoo'.",
-        "The most upvoted Reddit post ever is a photo of Mr. Rogers.",
-        "Reddit's logo was created in MS Paint!",
-        "AMA stands for 'Ask Me Anything'.",
-        "The first Reddit community was r/NSFW.",
-        "Reddit Gold is now called Reddit Premium.",
-        "Reddit was originally going to be called 'Snew'.",
-        "The first Reddit post was 'The Downing Street Memo'.",
-        "r/funny is one of the largest subreddits.",
-        "Reddit has its own secret holiday: 'Cake Day'.",
-        "The Reddit mascot, Snoo, was designed in a dorm room.",
-        "Reddit's upvote/downvote system inspired other platforms.",
-        "Reddit once had a button that only worked for 2 months!",
-        "Reddit's April Fools' events are legendary.",
-        "Reddit Premium removes ads and gives you coins.",
-        "Reddit's founders met at the University of Virginia.",
-        "Reddit's code was originally written in Lisp!"
-    ];
-    let i = 0;
-    
-    function updateFunFact() {
-        if (cancelled) return;
-        
-        const funFactElement = document.getElementById('fun-fact');
-        const funFactContent = funFactElement.querySelector('.fun-fact-content');
-        
-        // Add fade out animation
-        funFactElement.classList.add('fade-out');
-        
-        setTimeout(() => {
-            // Update content
-            funFactContent.textContent = facts[i % facts.length];
-            
-            // Remove fade out and add fade in
-            funFactElement.classList.remove('fade-out');
-            funFactElement.classList.add('fade-in');
-            
-            // Remove fade in class after animation completes
-            setTimeout(() => {
-                funFactElement.classList.remove('fade-in');
-            }, 600);
-            
-            i++;
-        }, 400);
-    }
-    
-    // Initial fun fact
-    updateFunFact();
-    
-    // Rotate fun facts every 4 seconds
-    setInterval(updateFunFact, 4000);
-    </script>
-    <style>
-        .progress-steps {
-            display: flex;
-            justify-content: space-between;
-            margin: 2rem 0;
-        }
-        
-        .step {
+        .loading-glass {
+            max-width: 600px;
+            margin: 40px auto;
+            background: rgba(255,255,255,0.85);
+            border-radius: 2.2rem;
+            box-shadow: 0 12px 48px rgba(0,0,0,0.13), 0 1.5px 6px rgba(0,0,0,0.04);
+            padding: 2.5em 2em 2em 2em;
             display: flex;
             flex-direction: column;
             align-items: center;
-            flex: 1;
             position: relative;
+            backdrop-filter: blur(8px);
         }
-        
-        .step:not(:last-child)::after {
-            content: '';
-            position: absolute;
-            top: 20px;
-            left: 50%;
+        .loading-title {
+            font-size: 2em;
+            font-weight: 700;
+            color: #0079d3;
+            margin-bottom: 0.5em;
+            text-align: center;
+        }
+        .section-progress {
             width: 100%;
-            height: 2px;
-            background: #e0e0e0;
-            z-index: 1;
+            margin: 2em 0 1.5em 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
         }
-        
-        .step.active:not(:last-child)::after {
-            background: #0079d3;
+        .section-cards {
+            display: flex;
+            gap: 1.2em;
+            width: 100%;
+            justify-content: space-between;
+            margin-bottom: 1.2em;
         }
-        
-        .step-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: #e0e0e0;
-            color: #666;
+        .section-card {
+            flex: 1 1 0;
+            min-width: 0;
+            background: linear-gradient(120deg, #f8fafd 80%, #eaf3fa 100%);
+            border-radius: 1.1em;
+            box-shadow: 0 2px 10px rgba(0,121,211,0.07);
+            border: 1.5px solid #e0e4ea;
+            padding: 1.1em 0.5em 1.1em 0.5em;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            transition: box-shadow 0.3s, border 0.3s, background 0.3s, opacity 0.3s;
+            opacity: 0.7;
+        }
+        .section-card.active {
+            background: linear-gradient(120deg, #e3f0ff 80%, #cbe7ff 100%);
+            border-color: #0079d3;
+            box-shadow: 0 4px 18px rgba(0,121,211,0.13);
+            opacity: 1;
+            animation: pulse 1.2s infinite;
+        }
+        .section-card.completed {
+            background: linear-gradient(120deg, #eafaf1 80%, #d2f7e3 100%);
+            border-color: #28a745;
+            opacity: 1;
+            animation: none;
+        }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(0,121,211,0.13); }
+            70% { box-shadow: 0 0 0 10px rgba(0,121,211,0.03); }
+            100% { box-shadow: 0 0 0 0 rgba(0,121,211,0.13); }
+        }
+        .section-icon {
+            font-size: 2em;
+            margin-bottom: 0.4em;
+            color: #0079d3;
+            transition: color 0.3s;
+        }
+        .section-card.completed .section-icon {
+            color: #28a745;
+            animation: bounceIn 0.7s;
+        }
+        @keyframes bounceIn {
+            0% { transform: scale(0.7); opacity: 0.5; }
+            60% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .section-label {
+            font-size: 1.08em;
+            font-weight: 600;
+            color: #444;
+            text-align: center;
+        }
+        .section-card.active .section-label {
+            color: #0079d3;
+        }
+        .section-card.completed .section-label {
+            color: #28a745;
+        }
+        .progress-bar-container {
+            width: 100%;
+            background: #e9ecef;
+            border-radius: 16px;
+            height: 1.8rem;
+            margin-top: 0.7em;
+            margin-bottom: 0.7em;
+            overflow: hidden;
+            box-shadow: 0 2px 8px #0079d355;
+        }
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #0079d3 0%, #36d1c4 100%);
+            border-radius: 16px;
+            transition: width 0.6s cubic-bezier(.4,2,.3,1);
+            /* Remove text styling */
+            font-size: 0;
+            color: transparent;
+            display: block;
+            box-shadow: 0 2px 8px #0079d355;
+        }
+        .fun-fact-card {
+            margin: 2.2em 0 0 0;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 1.2em;
+            box-shadow: 0 4px 16px rgba(0, 121, 211, 0.10);
+            padding: 1.5em 2em;
             display: flex;
             align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            z-index: 2;
+            min-height: 90px;
+            max-width: 420px;
+            width: 100%;
             position: relative;
-        }
-        
-        .step.active .step-icon {
-            background: #0079d3;
-            color: white;
-        }
-        
-        .step-text {
-            margin-top: 0.5rem;
-            font-size: 0.9rem;
-            text-align: center;
-            color: #666;
-        }
-        
-        .step.active .step-text {
+            overflow: hidden;
+            font-size: 1.13em;
             color: #0079d3;
-            font-weight: bold;
+            font-style: italic;
+            animation: fadeInUp 0.7s;
         }
-        
+        .fun-fact-card .fun-fact-icon {
+            font-size: 2em;
+            margin-right: 1em;
+            opacity: 0.8;
+        }
+        .fun-fact-card .fun-fact-text {
+            flex: 1;
+            color: #333;
+            font-weight: 500;
+        }
+        .fun-fact-card.fade-in {
+            animation: fadeInUp 0.7s;
+        }
+        .fun-fact-card.fade-out {
+            animation: fadeOutDown 0.5s;
+        }
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes fadeOutDown {
+            from { opacity: 1; transform: translateY(0); }
+            to { opacity: 0; transform: translateY(-20px); }
+        }
+        .cancel-btn {
+            margin-top: 2.2em;
+            font-size: 1.1em;
+            padding: 0.7em 2.2em;
+            border-radius: 10px;
+            font-weight: 600;
+            border: 2px solid #dc3545;
+            color: #dc3545;
+            background: transparent;
+            transition: all 0.3s cubic-bezier(.4,2,.3,1);
+        }
+        .cancel-btn:hover {
+            background: #dc3545;
+            color: #fff;
+            box-shadow: 0 2px 8px rgba(220, 53, 69, 0.13);
+        }
+        .footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #f8f9fa;
+            text-align: center;
+            padding: 12px;
+            border-top: 1px solid #dee2e6;
+            font-size: 0.9em;
+            color: #6c757d;
+            z-index: 1000;
+        }
+        body.dark-theme {
+            background: linear-gradient(135deg, #23272f 0%, #181c20 100%) !important;
+            color: #e6e6e6 !important;
+        }
+        body.dark-theme .loading-glass {
+            background: rgba(35,39,47,0.92) !important;
+            box-shadow: 0 12px 48px rgba(0,0,0,0.30), 0 1.5px 6px rgba(0,0,0,0.10);
+        }
+        body.dark-theme .loading-title {
+            color: #7bb5ed;
+        }
+        body.dark-theme .section-card {
+            background: linear-gradient(120deg, #23272f 80%, #1a1d22 100%) !important;
+            border: 1.5px solid #353a45 !important;
+        }
+        body.dark-theme .section-card.active {
+            background: linear-gradient(120deg, #2a3a4d 80%, #1a1d22 100%) !important;
+            border-color: #7bb5ed !important;
+        }
+        body.dark-theme .section-card.completed {
+            background: linear-gradient(120deg, #233f2f 80%, #1a1d22 100%) !important;
+            border-color: #28a745 !important;
+        }
+        body.dark-theme .section-label {
+            color: #b0b8c1 !important;
+        }
+        body.dark-theme .section-card.active .section-label {
+            color: #7bb5ed !important;
+        }
+        body.dark-theme .section-card.completed .section-label {
+            color: #28a745 !important;
+        }
+        body.dark-theme .progress-bar-container {
+            background: #3a3a3a !important;
+        }
+        body.dark-theme .progress-bar {
+            background: linear-gradient(90deg, #7bb5ed 0%, #36d1c4 100%) !important;
+            color: #23272f !important;
+        }
+        body.dark-theme .fun-fact-card {
+            background: linear-gradient(135deg, #3a3a3a 0%, #2d2d2d 100%) !important;
+            color: #7bb5ed !important;
+        }
+        body.dark-theme .fun-fact-card .fun-fact-text {
+            color: #e6e6e6 !important;
+        }
+        body.dark-theme .footer {
+            background: #2d2d2d;
+            border-top-color: #555;
+            color: #b0b0b0;
+        }
+        body.dark-theme .cancel-btn {
+            border-color: #dc3545;
+            color: #dc3545;
+        }
+        body.dark-theme .cancel-btn:hover {
+            background: #dc3545;
+            color: #fff;
+        }
+        @media (max-width: 700px) {
+            .loading-glass { max-width: 98vw; padding: 1.2em 0.5em; }
+            .section-cards { flex-direction: column; gap: 0.7em; }
+        }
         @media (max-width: 600px) {
-            .progress-steps {
-                flex-direction: column;
-                gap: 1rem;
+            .loading-glass {
+                max-width: 100vw;
+                padding: 1.2em 0.5em;
+                border-radius: 1.1rem;
             }
-            
-            .step:not(:last-child)::after {
-                display: none;
+            .loading-title {
+                font-size: 1.2em;
+            }
+            .section-cards {
+                flex-direction: column;
+                gap: 0.7em;
+            }
+            .section-card {
+                padding: 0.7em 0.3em;
+                border-radius: 0.7em;
+                font-size: 0.97em;
+            }
+            .section-label {
+                font-size: 0.97em;
+            }
+            .progress-bar-container {
+                height: 1.3rem;
+                border-radius: 1.1rem;
+                margin-bottom: 1.2em;
+            }
+            .progress-bar {
+                border-radius: 1.1rem;
+                height: 100%;
+            }
+            .fun-fact-card {
+                margin: 0.4em auto 0 auto;
+                padding: 1.1em 0.7em 1.1em 0.7em;
+                border-radius: 0.9em;
+                font-size: 1.01em;
+                max-width: 98vw;
+                min-width: 0;
+                min-height: 70px;
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                justify-content: center;
+                word-break: break-word;
+                white-space: normal;
+                box-sizing: border-box;
+            }
+            .fun-fact-card .fun-fact-icon {
+                font-size: 1.3em;
+                margin-right: 0.7em;
+                flex-shrink: 0;
+            }
+            .fun-fact-card .fun-fact-text {
+                font-size: 1em;
+                font-weight: 500;
+                flex: 1;
+                text-align: left;
+                word-break: break-word;
+                white-space: normal;
+                min-width: 0;
+            }
+            .cancel-btn {
+                width: 100%;
+                font-size: 1em;
+                padding: 0.7em 0.5em;
+                border-radius: 8px;
+                margin-top: 1.2em;
+            }
+            .footer {
+                font-size: 0.85em;
+                padding: 0.7em 0.2em;
+                position: fixed;
+                left: 0; right: 0; bottom: 0;
+                background: #e9ecef;
+                z-index: 100;
             }
         }
     </style>
+</head>
+<body>
+    <div class="loading-glass">
+        <div class="loading-title">Processing Reddit Thread...</div>
+        <div class="section-progress">
+            <div class="section-cards" id="sectionCards">
+                <div class="section-card" id="section-0">
+                    <div class="section-icon"><i class="fas fa-download"></i></div>
+                    <div class="section-label">Fetching Thread</div>
+                </div>
+                <div class="section-card" id="section-1">
+                    <div class="section-icon"><i class="fas fa-comments"></i></div>
+                    <div class="section-label">Analyzing Comments</div>
+                </div>
+                <div class="section-card" id="section-2">
+                    <div class="section-icon"><i class="fas fa-robot"></i></div>
+                    <div class="section-label">Generating Summary</div>
+                </div>
+                <div class="section-card" id="section-3">
+                    <div class="section-icon"><i class="fas fa-lightbulb"></i></div>
+                    <div class="section-label">Extracting Insights</div>
+                </div>
+                <div class="section-card" id="section-4">
+                    <div class="section-icon"><i class="fas fa-flag-checkered"></i></div>
+                    <div class="section-label">Finalizing</div>
+                </div>
+            </div>
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progressBar" style="width: 5%;"></div>
+            </div>
+        </div>
+        <div class="fun-fact-card" id="funFactCard">
+            <span class="fun-fact-icon" id="funFactIcon" style="font-size:1.5em; margin-right:1em; filter: drop-shadow(0 2px 8px #0079d3aa);">🧠</span>
+            <span class="fun-fact-text" id="funFactText" style="font-size:0.98em; font-weight:500; letter-spacing:0.01em;">Did you know? Reddit was founded in 2005!</span>
+        </div>
+        <button class="cancel-btn" onclick="cancelProcessing()">Cancel</button>
+    </div>
+    <div class="footer">
+        Powered by Junaid
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+    // Theme switcher
+    function toggleTheme() {
+        const body = document.body;
+        if (body.classList.contains('dark-theme')) {
+            body.classList.remove('dark-theme');
+            localStorage.setItem('theme', 'light');
+        } else {
+            body.classList.add('dark-theme');
+            localStorage.setItem('theme', 'dark');
+        }
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme === 'dark') {
+            document.body.classList.add('dark-theme');
+        }
+        pollProgress();
+        rotateFunFact();
+    });
+    // Fun facts
+    const funFacts = [
+        'Did you know? Reddit was founded in 2005!',
+        'Reddit is sometimes called "the front page of the internet."',
+        'There are over 100,000 active subreddits!',
+        'The Reddit alien mascot is named "Snoo".',
+        'The most upvoted Reddit post ever is a photo of Mr. Rogers.',
+        'Reddit\'s logo was created in MS Paint!',
+        'AMA stands for "Ask Me Anything".',
+        'The first Reddit community was r/NSFW.',
+        'Reddit Gold is now called Reddit Premium.',
+        'Reddit was originally going to be called "Snew".',
+        'The first Reddit post was "The Downing Street Memo".',
+        'r/funny is one of the largest subreddits.',
+        'Reddit has its own secret holiday: "Cake Day".',
+        'The Reddit mascot, Snoo, was designed in a dorm room.',
+        'Reddit\'s upvote/downvote system inspired other platforms.',
+        'Reddit once had a button that only worked for 2 months!',
+        'Reddit\'s April Fools\' events are legendary.',
+        'Reddit Premium removes ads and gives you coins.',
+        'Reddit\'s founders met at the University of Virginia.',
+        'Reddit\'s code was originally written in Lisp!'
+    ];
+    let funFactIdx = 0;
+    function rotateFunFact() {
+        const card = document.getElementById('funFactCard');
+        const text = document.getElementById('funFactText');
+        const icon = document.getElementById('funFactIcon');
+        card.classList.remove('fade-in');
+        card.classList.add('fade-out');
+        setTimeout(() => {
+            funFactIdx = (funFactIdx + 1) % funFacts.length;
+            text.textContent = funFacts[funFactIdx];
+            // Animate icon pop
+            icon.style.transform = 'scale(1.25)';
+            setTimeout(() => { icon.style.transform = 'scale(1)'; }, 350);
+            card.classList.remove('fade-out');
+            card.classList.add('fade-in');
+        }, 400);
+        setTimeout(rotateFunFact, 4000);
+    }
+    // Animate sections with constant timing, then poll for result
+    function pollProgress() {
+        const jobId = "{{ job_id }}";
+        const sectionCount = 5;
+        let currentSection = 0;
+        function animateSection() {
+            fetch(`/progress/${jobId}`)
+                .then(r => r.json())
+                .then(data => {
+                    // Animate progress bar
+                    const progressBar = document.getElementById('progressBar');
+                    const targetProgress = ((currentSection + 1) / sectionCount) * 100;
+                    progressBar.style.width = targetProgress + '%';
+                    // Animate section cards
+                    for (let i = 0; i < sectionCount; i++) {
+                        const card = document.getElementById('section-' + i);
+                        card.classList.remove('active', 'completed');
+                        if (i < currentSection) {
+                            card.classList.add('completed');
+                        } else if (i === currentSection) {
+                            card.classList.add('active');
+                        }
+                    }
+                    if (currentSection < sectionCount - 2) {
+                        currentSection++;
+                        setTimeout(animateSection, 1200);
+                    } else if (currentSection === sectionCount - 2) {
+                        currentSection++;
+                        setTimeout(animateSection, 1200); // Delay before finalizing
+                    } else {
+                        // After last step, immediately try to redirect to result page (no spinner, no extra delay)
+                        for (let i = 0; i < sectionCount; i++) {
+                            const card = document.getElementById('section-' + i);
+                            card.classList.remove('active');
+                            card.classList.add('completed');
+                        }
+                        progressBar.style.width = '100%';
+                        // Instantly check for result and redirect
+                        fetch(`/result/${jobId}`, { method: 'HEAD' })
+                            .then(r => {
+                                if (r.status === 200) {
+                                    window.location.href = `/result/${jobId}`;
+                                } else {
+                                    setTimeout(waitForResult, 100); // poll very quickly if not ready
+                                }
+                            })
+                            .catch(() => setTimeout(waitForResult, 150));
+                    }
+                })
+                .catch(() => { setTimeout(animateSection, 1000); });
+        }
+        animateSection();
+
+        function showFinalizingSpinner() {
+            let spinner = document.getElementById('finalizingSpinner');
+            if (!spinner) {
+                spinner = document.createElement('div');
+                spinner.id = 'finalizingSpinner';
+                spinner.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:1.5em;"><div class="spinner-border text-success" role="status" style="width:2.5rem;height:2.5rem;"></div><div style="margin-top:0.7em;font-weight:600;color:#28a745;font-size:1.1em;">Finalizing your summary...</div></div>';
+                document.querySelector('.loading-glass').appendChild(spinner);
+            }
+        }
+        function waitForResult() {
+            fetch(`/result/${jobId}`, { method: 'HEAD' })
+                .then(r => {
+                    if (r.status === 200) {
+                        window.location.href = `/result/${jobId}`;
+                    } else {
+                        setTimeout(waitForResult, 500);
+                    }
+                })
+                .catch(() => setTimeout(waitForResult, 700));
+        }
+    }
+    function cancelProcessing() {
+        if (confirm('Are you sure you want to cancel? This will stop the processing and return to the homepage.')) {
+            window.location.href = '/';
+        }
+    }
+    </script>
 </body>
 </html>
