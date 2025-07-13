@@ -13,8 +13,104 @@ import random
 import subprocess
 import json # Added for parsing JSON from Gemini
 from praw.models import Comment
+import time
+from enum import Enum
+from datetime import datetime, timedelta
 
 load_dotenv()
+
+# Circuit Breaker Implementation
+class CircuitState(Enum):
+    CLOSED = "CLOSED"      # Normal operation
+    OPEN = "OPEN"          # Failing, reject requests
+    HALF_OPEN = "HALF_OPEN"  # Testing if service is back
+
+class CircuitBreaker:
+    def __init__(self, failure_threshold=5, recovery_timeout=60, expected_exception=Exception):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.expected_exception = expected_exception
+        self.failure_count = 0
+        self.last_failure_time = None
+        self.state = CircuitState.CLOSED
+        self._lock = threading.Lock()
+    
+    def call(self, func, *args, **kwargs):
+        if self.state == CircuitState.OPEN:
+            if self._should_attempt_reset():
+                self.state = CircuitState.HALF_OPEN
+            else:
+                raise Exception(f"Circuit breaker is OPEN. Service unavailable. Last failure: {self.last_failure_time}")
+        
+        try:
+            result = func(*args, **kwargs)
+            self._on_success()
+            return result
+        except self.expected_exception as e:
+            self._on_failure()
+            raise e
+    
+    def _on_success(self):
+        with self._lock:
+            self.failure_count = 0
+            self.state = CircuitState.CLOSED
+    
+    def _on_failure(self):
+        with self._lock:
+            self.failure_count += 1
+            self.last_failure_time = datetime.now()
+            
+            if self.failure_count >= self.failure_threshold:
+                self.state = CircuitState.OPEN
+    
+    def _should_attempt_reset(self):
+        if self.last_failure_time is None:
+            return False
+        return datetime.now() - self.last_failure_time > timedelta(seconds=self.recovery_timeout)
+    
+    def get_status(self):
+        return {
+            'state': self.state.value,
+            'failure_count': self.failure_count,
+            'last_failure_time': self.last_failure_time.isoformat() if self.last_failure_time else None
+        }
+
+# Initialize circuit breakers
+reddit_circuit_breaker = CircuitBreaker(
+    failure_threshold=3, 
+    recovery_timeout=120,  # 2 minutes
+    expected_exception=Exception
+)
+
+gemini_circuit_breaker = CircuitBreaker(
+    failure_threshold=3, 
+    recovery_timeout=300,  # 5 minutes (Gemini rate limits are usually longer)
+    expected_exception=Exception
+)
+
+# Multiple Gemini API keys support
+GEMINI_API_KEYS = []
+primary_key = os.getenv("GEMINI_API_KEY")
+if primary_key:
+    GEMINI_API_KEYS.append(primary_key)
+
+# Add additional keys if they exist
+for i in range(1, 6):  # Support up to 5 additional keys
+    additional_key = os.getenv(f"GEMINI_API_KEY_{i}")
+    if additional_key:
+        GEMINI_API_KEYS.append(additional_key)
+
+current_key_index = 0
+
+def get_next_gemini_key():
+    """Get the next available Gemini API key, cycling through available keys."""
+    global current_key_index
+    if not GEMINI_API_KEYS:
+        return None
+    
+    key = GEMINI_API_KEYS[current_key_index]
+    current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
+    return key
 
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
 REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
@@ -64,7 +160,10 @@ def get_random_trending_thread_url():
     if not reddit: # Check if PRAW was initialized
         logging.error("Reddit PRAW not initialized, cannot fetch trending threads.")
         return None
-    try:
+    
+    def _fetch_trending_thread():
+        if not reddit:
+            raise Exception("Reddit PRAW not initialized")
         subreddit = reddit.subreddit("popular")
         # Fetch fewer posts for quicker response, and filter as before
         posts = [post for post in subreddit.hot(limit=25) if not post.stickied and post.num_comments > 5]
@@ -73,15 +172,21 @@ def get_random_trending_thread_url():
             return None
         post = random.choice(posts)
         return f"https://www.reddit.com{post.permalink}"
+    
+    try:
+        return reddit_circuit_breaker.call(_fetch_trending_thread)
     except Exception as e:
-        logging.error(f"Error fetching random trending thread: {e}")
+        logging.error(f"Circuit breaker prevented Reddit API call: {e}")
         return None
 
 def fetch_post_and_comments(thread_url, limit=50): # Reduced default limit
     """Fetches the main post text and a limited number of comments from a Reddit thread."""
     if not reddit: # Check if PRAW was initialized
         raise ValueError("Reddit PRAW not initialized, cannot fetch post and comments.")
-    try:
+    
+    def _fetch_post_and_comments():
+        if not reddit:
+            raise Exception("Reddit PRAW not initialized")
         submission = reddit.submission(url=thread_url)
         # Replacing more comments with limit=0 can be very slow for large threads.
         # Consider a more aggressive limit or a different strategy if this is the bottleneck.
@@ -96,41 +201,64 @@ def fetch_post_and_comments(thread_url, limit=50): # Reduced default limit
         
         post_text = submission.title + "\n\n" + (submission.selftext or "")
         return post_text, comments
+    
+    try:
+        return reddit_circuit_breaker.call(_fetch_post_and_comments)
     except Exception as e:
-        logging.error(f"Error fetching post and comments for {thread_url}: {e}")
+        logging.error(f"Circuit breaker prevented Reddit API call for {thread_url}: {e}")
         raise
 
 def gemini_api_process(text_prompt, model=GEMINI_CLI_MODEL, api_key=None):
     """
     Calls the Gemini API to process a text prompt and returns the output.
+    Supports multiple API keys with automatic rotation on rate limits.
     """
     if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = get_next_gemini_key()
     if not api_key:
-        return "Error: Gemini API key not set.", True
+        return "Error: No Gemini API keys available.", True
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    headers = {"Content-Type": "application/json"}
-    data = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": text_prompt}
-                ]
-            }
-        ]
-    }
+    def _call_gemini_api():
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": text_prompt}
+                    ]
+                }
+            ]
+        }
 
-    try:
         response = requests.post(url, headers=headers, json=data, timeout=60)
+        
+        # Check for rate limit or quota exceeded
+        if response.status_code == 429 or response.status_code == 403:
+            error_text = response.text.lower()
+            if "quota" in error_text or "rate" in error_text or "limit" in error_text:
+                # Try with next API key
+                next_key = get_next_gemini_key()
+                if next_key and next_key != api_key:
+                    logging.info(f"Rate limit hit with key {api_key[:10]}..., trying next key")
+                    # Recursive call with next key
+                    return gemini_api_process(text_prompt, model, next_key)
+                else:
+                    return f"All Gemini API keys have reached their limits. Please try again later.", True
+        
         if response.status_code != 200:
             return f"Gemini API error: {response.text}", True
+        
         result = response.json()
         # Extract the text from the response
         text = result["candidates"][0]["content"]["parts"][0]["text"]
         return text.strip(), False
+
+    try:
+        return gemini_circuit_breaker.call(_call_gemini_api)
     except Exception as e:
-        return f"Gemini API call failed: {e}", True
+        logging.error(f"Circuit breaker prevented Gemini API call: {e}")
+        return f"Gemini API call failed due to circuit breaker: {e}", True
 
 def clean_gemini_output(output):
     """Removes common unwanted output from Gemini CLI."""
@@ -141,11 +269,63 @@ def clean_gemini_output(output):
 def extract_json_from_markdown(text):
     """
     Extracts JSON from a Markdown code block if present, otherwise returns the text as is.
+    Handles malformed JSON by attempting to fix common issues.
     """
+    # First try to extract JSON from markdown code blocks
     match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text, re.IGNORECASE)
     if match:
-        return match.group(1).strip()
-    return text.strip()
+        json_str = match.group(1).strip()
+    else:
+        # If no code block, try to find JSON in the text
+        json_str = text.strip()
+    
+    # Try to fix common JSON formatting issues
+    try:
+        # First attempt: parse as-is
+        json.loads(json_str)
+        return json_str
+    except json.JSONDecodeError as e:
+        logging.warning(f"Initial JSON parsing failed: {e}")
+        
+        # Second attempt: try to fix common issues
+        try:
+            # Remove any trailing commas before closing braces/brackets
+            fixed_json = re.sub(r',(\s*[}\]])', r'\1', json_str)
+            # Fix missing quotes around keys
+            fixed_json = re.sub(r'(\s*)(\w+)(\s*:)', r'\1"\2"\3', fixed_json)
+            # Fix single quotes to double quotes
+            fixed_json = fixed_json.replace("'", '"')
+            
+            json.loads(fixed_json)
+            return fixed_json
+        except json.JSONDecodeError as e2:
+            logging.warning(f"Fixed JSON parsing also failed: {e2}")
+            
+            # Third attempt: try to extract just the content we need
+            try:
+                # Try to extract summary, action_items_notes, and key_facts manually
+                summary_match = re.search(r'"summary"\s*:\s*"([^"]*(?:"[^"]*")*[^"]*)"', json_str, re.DOTALL)
+                action_items_match = re.search(r'"action_items_notes"\s*:\s*"([^"]*(?:"[^"]*")*[^"]*)"', json_str, re.DOTALL)
+                key_facts_match = re.search(r'"key_facts"\s*:\s*"([^"]*(?:"[^"]*")*[^"]*)"', json_str, re.DOTALL)
+                
+                if summary_match or action_items_match or key_facts_match:
+                    manual_json = {
+                        "summary": summary_match.group(1) if summary_match else "Summary not found.",
+                        "action_items_notes": action_items_match.group(1) if action_items_match else "No action items found.",
+                        "key_facts": key_facts_match.group(1) if key_facts_match else "No key facts found."
+                    }
+                    return json.dumps(manual_json)
+            except Exception as e3:
+                logging.error(f"Manual JSON extraction failed: {e3}")
+    
+    # If all parsing attempts fail, return a fallback structure
+    logging.error(f"All JSON parsing attempts failed. Raw output: {text[:500]}...")
+    fallback_json = {
+        "summary": "Error: Could not parse Gemini response properly. The summary may be incomplete.",
+        "action_items_notes": "No action items could be extracted due to parsing error.",
+        "key_facts": "No key facts could be extracted due to parsing error."
+    }
+    return json.dumps(fallback_json)
 
 def process_thread_with_gemini(combined_text, language="en", summary_length="medium"):
     """
@@ -165,13 +345,17 @@ def process_thread_with_gemini(combined_text, language="en", summary_length="med
         summary_directive = "Provide a concise summary (around 150 words). Focus on the main idea of the original post and briefly outline the general consensus or key differing opinions in comments."
 
     prompt = f"""
-As an AI assistant, analyze the following Reddit thread and provide the requested information in a JSON format.
-The JSON object should have the following keys:
+As an AI assistant, analyze the following Reddit thread and provide the requested information in a VALID JSON format.
+The JSON object must have exactly these keys:
 - "summary": A plain English summary based on the length requested.
-- "action_items_notes": A bulleted list of 3-5 main action items and important notes. If fewer, list only what's important.
-- "key_facts": A bulleted list of 3-5 key facts. If fewer, list only what's important.
+- "action_items_notes": A bulleted list of 3-5 main action items and important notes. Use * or - for bullet points, one per line.
+- "key_facts": A bulleted list of 3-5 key facts. Use * or - for bullet points, one per line.
 
-Ensure the output is valid JSON.
+IMPORTANT: Ensure the JSON is properly formatted with:
+- All strings properly quoted
+- No trailing commas
+- Valid JSON syntax
+- Proper escaping of quotes within strings
 
 Here is the Reddit Thread:
 ---
@@ -180,9 +364,10 @@ Here is the Reddit Thread:
 
 Instructions:
 1. Summary: {summary_directive}
-2. Action Items & Notes: List concise bullet points.
-3. Key Facts: List concise bullet points.
+2. Action Items & Notes: List concise bullet points using * or - format, one per line.
+3. Key Facts: List concise bullet points using * or - format, one per line.
 4. Language: All output should be in {language} if possible, otherwise default to English.
+5. JSON Format: Return ONLY valid JSON, no additional text or markdown formatting.
 
 JSON Output:
 """
@@ -199,10 +384,21 @@ JSON Output:
         summary = parsed_output.get("summary", "Summary not found.")
         action_items_notes = parsed_output.get("action_items_notes", "No action items found.")
         key_facts = parsed_output.get("key_facts", "No key facts found.")
+        
+        # Debug logging to see what format is being returned
+        logging.info(f"Action items format: {repr(action_items_notes[:200])}")
+        logging.info(f"Key facts format: {repr(key_facts[:200])}")
+        
         return {"summary": summary, "action_items_notes": action_items_notes, "key_facts": key_facts}, False
     except json.JSONDecodeError as e:
-        logging.error(f"Failed to parse JSON from Gemini output: {e}\nRaw output: {cleaned_result}")
-        return {"summary": f"Error parsing Gemini response: {e}. Raw output: {cleaned_result[:200]}...", "action_items_notes": "", "key_facts": ""}, True
+        logging.error(f"Failed to parse JSON from Gemini output: {e}")
+        logging.error(f"JSON string length: {len(json_str)}")
+        logging.error(f"Raw output preview: {cleaned_result[:1000]}...")
+        logging.error(f"Extracted JSON preview: {json_str[:1000]}...")
+        
+        # Try to provide a more helpful error message
+        error_msg = f"Error parsing Gemini response: {e}. The AI response may have been malformed."
+        return {"summary": error_msg, "action_items_notes": "", "key_facts": ""}, True
     except Exception as e:
         logging.error(f"Unexpected error processing Gemini output: {e}")
         return {"summary": f"An unexpected error occurred: {e}", "action_items_notes": "", "key_facts": ""}, True
@@ -240,7 +436,10 @@ def extract_expert_opinions(thread_url, limit=50): # Reduced limit for consisten
     if not reddit: # Check if PRAW was initialized
         logging.error("Reddit PRAW not initialized, cannot extract expert opinions.")
         return []
-    try:
+    
+    def _extract_expert_opinions():
+        if not reddit:
+            raise Exception("Reddit PRAW not initialized")
         submission = reddit.submission(url=thread_url)
         # Be careful with replace_more(limit=0) if it's the bottleneck
         submission.comments.replace_more(limit=0)
@@ -256,8 +455,11 @@ def extract_expert_opinions(thread_url, limit=50): # Reduced limit for consisten
         
         expert_comments = sorted(expert_comments, key=lambda x: x[1], reverse=True)
         return expert_comments
+    
+    try:
+        return reddit_circuit_breaker.call(_extract_expert_opinions)
     except Exception as e:
-        logging.error(f"Error extracting expert opinions for {thread_url}: {e}")
+        logging.error(f"Circuit breaker prevented Reddit API call for expert opinions: {e}")
         return []
 
 def extract_funny_comments(comments, max_funny=3):
@@ -286,12 +488,38 @@ def bullets_to_html(text):
     in_list = False
 
     for line in lines:
-        if line.startswith('*') or line.startswith('-'):
+        # Check for various bullet point formats
+        if (line.startswith('*') or line.startswith('-') or 
+            line.startswith('•') or line.startswith('·') or
+            line.startswith('‣') or line.startswith('◦') or
+            line.startswith('▪') or line.startswith('▫') or
+            line.startswith('○') or line.startswith('●') or
+            line.startswith('◆') or line.startswith('◇') or
+            line.startswith('■') or line.startswith('□') or
+            line.startswith('▶') or line.startswith('►') or
+            line.startswith('➤') or line.startswith('➜') or
+            line.startswith('→') or line.startswith('⇒') or
+            line.startswith('1.') or line.startswith('2.') or line.startswith('3.') or
+            line.startswith('4.') or line.startswith('5.') or line.startswith('6.') or
+            line.startswith('7.') or line.startswith('8.') or line.startswith('9.') or
+            line.startswith('10.') or line.startswith('11.') or line.startswith('12.') or
+            line.startswith('13.') or line.startswith('14.') or line.startswith('15.') or
+            line.startswith('16.') or line.startswith('17.') or line.startswith('18.') or
+            line.startswith('19.') or line.startswith('20.') or
+            line.startswith('1)') or line.startswith('2)') or line.startswith('3)') or
+            line.startswith('4)') or line.startswith('5)') or line.startswith('6)') or
+            line.startswith('7)') or line.startswith('8)') or line.startswith('9)') or
+            line.startswith('10)') or line.startswith('11)') or line.startswith('12)') or
+            line.startswith('13)') or line.startswith('14)') or line.startswith('15)') or
+            line.startswith('16)') or line.startswith('17)') or line.startswith('18)') or
+            line.startswith('19)') or line.startswith('20)')):
             if not in_list:
                 html_content.append("<ul>")
                 in_list = True
-            html_content.append(f"<li>{line[1:].strip()}</li>") # Remove bullet char
-    else:
+            # Remove the bullet character and any leading whitespace
+            clean_line = line.lstrip('*-•·‣◦▪▫○●◆◇■□▶►➤➜→⇒0123456789.() ')
+            html_content.append(f"<li>{clean_line}</li>")
+        else:
             if in_list:
                 html_content.append("</ul>")
                 in_list = False
@@ -305,17 +533,29 @@ def bullets_to_html(text):
 def background_summarize(job_id, thread_url, language="en", summary_length="medium"):
     """Performs summarization and data extraction in a background thread."""
     try:
-        post_text, comments = fetch_post_and_comments(thread_url, limit=50) # Use reduced limit here
-        
+        # Check cache first
+        cache_key = f"summary_{thread_url}_{summary_length}"
+        cached_result = cache.get(cache_key)
+        if cached_result:
+            logging.info(f"Using cached result for {thread_url}")
+            cache.set(job_id, cached_result, timeout=600)
+            return
+
+        post_text, comments = fetch_post_and_comments(thread_url, limit=20) # Lowered limit for speed
+
         # Truncate the combined text BEFORE sending to LLM for all purposes
-        combined_for_llm = safe_truncate(post_text + "\n\n" + "\n".join([c[0] for c in comments[:20]]), 8000) # Use up to 20 comments, 8000 char limit
+        combined_for_llm = safe_truncate(post_text + "\n\n" + "\n".join([c[0] for c in comments[:10]]), 8000) # Use up to 10 comments, 8000 char limit
 
         # Consolidated Gemini call
         gemini_outputs, gemini_error = process_thread_with_gemini(combined_for_llm, language=language, summary_length=summary_length)
 
         if gemini_error:
-            # If the Gemini call itself failed or parsing failed, store the error
-            cache.set(job_id, {'error': gemini_outputs.get("summary", "An unknown error occurred during Gemini processing.")}, timeout=600)
+            # Check if it's a circuit breaker error
+            if "circuit breaker" in gemini_outputs.get("summary", "").lower():
+                error_msg = "Gemini API is temporarily unavailable due to rate limits or service issues. Please try again in a few minutes."
+            else:
+                error_msg = gemini_outputs.get("summary", "An unknown error occurred during Gemini processing.")
+            cache.set(job_id, {'error': error_msg}, timeout=600)
             return
 
         summary = gemini_outputs["summary"]
@@ -329,10 +569,10 @@ def background_summarize(job_id, thread_url, language="en", summary_length="medi
         
         sentiment_verdict = analyze_sentiment(comments)
         faqs = extract_faqs(comments)
-        expert_opinions = extract_expert_opinions(thread_url, limit=50) # Keep consistent limit
+        expert_opinions = extract_expert_opinions(thread_url, limit=20) # Keep consistent limit
         funny_comments = extract_funny_comments(comments)
         
-        cache.set(job_id, {
+        result = {
             'summary': summary,
             'top_comments': top_comments,
             'links': links,
@@ -343,49 +583,100 @@ def background_summarize(job_id, thread_url, language="en", summary_length="medi
             'action_items_notes': action_items_notes,
             'key_facts': key_facts,
             'thread_url': thread_url
-        }, timeout=600)
+        }
+        
+        # Cache the result for 1 hour
+        cache.set(cache_key, result, timeout=3600)
+        cache.set(job_id, result, timeout=600)
         logging.info(f"Summarization job {job_id} completed successfully.")
     except ValueError as ve:
         logging.error(f"Configuration error for job {job_id}: {ve}", exc_info=True)
         cache.set(job_id, {'error': f"Configuration Error: {ve}"}, timeout=600)
     except Exception as e:
+        # Check if it's a circuit breaker error
+        if "circuit breaker" in str(e).lower():
+            if "reddit" in str(e).lower():
+                error_msg = "Reddit API is temporarily unavailable. Please try again in a few minutes."
+            else:
+                error_msg = "External service is temporarily unavailable. Please try again in a few minutes."
+        else:
+            error_msg = f"An error occurred during processing: {e}. Please check the URL or try again later."
+        
         logging.error(f"Error in background summarization for job {job_id} ({thread_url}): {e}", exc_info=True)
-        cache.set(job_id, {'error': f"An error occurred during processing: {e}. Please check the URL or try again later."}, timeout=600)
+        cache.set(job_id, {'error': error_msg}, timeout=600)
 
 def get_trending_subreddits(limit=5):
     """Fetches a list of trending subreddits."""
     if not reddit: # Check if PRAW was initialized
         logging.error("Reddit PRAW not initialized, cannot fetch trending subreddits.")
         return []
-    try:
+    
+    def _fetch_trending_subreddits():
+        if not reddit:
+            raise Exception("Reddit PRAW not initialized")
         return [sub.display_name for sub in reddit.subreddits.popular(limit=limit)]
+    
+    try:
+        return reddit_circuit_breaker.call(_fetch_trending_subreddits)
     except Exception as e:
-        logging.error(f"Error fetching trending subreddits: {e}")
+        logging.error(f"Circuit breaker prevented Reddit API call for trending subreddits: {e}")
+        return []
+
+def get_trending_threads(limit=5):
+    """Fetches a list of trending Reddit threads (title and URL)."""
+    if not reddit:
+        logging.error("Reddit PRAW not initialized, cannot fetch trending threads.")
+        return []
+    
+    def _fetch_trending_threads():
+        if not reddit:
+            raise Exception("Reddit PRAW not initialized")
+        subreddit = reddit.subreddit("popular")
+        posts = [post for post in subreddit.hot(limit=25) if not post.stickied and post.num_comments > 5]
+        trending = []
+        for post in posts[:limit]:
+            trending.append({
+                'title': post.title,
+                'url': f"https://www.reddit.com{post.permalink}"
+            })
+        return trending
+    
+    try:
+        return reddit_circuit_breaker.call(_fetch_trending_threads)
+    except Exception as e:
+        logging.error(f"Circuit breaker prevented Reddit API call for trending threads: {e}")
         return []
 
 @app.route("/", methods=["GET", "POST"])
 def index():
     """Handles the main page, input form, and starts summarization."""
-    # Remove language selection, always use English
     error = None
+    trending_threads = get_trending_threads(limit=5) if request.method == "GET" else []
     if request.method == "POST":
         thread_url = request.form.get("thread_url")
+        summary_length = request.form.get("summary_length", "medium")
 
         if not thread_url:
             error = "Please enter a Reddit thread URL."
-            return render_template("index.html", error=error, thread_url_val=request.form.get('thread_url', ''))
+            return render_template("index.html", error=error, thread_url_val=request.form.get('thread_url', ''), summary_length_val=summary_length, trending_threads=trending_threads)
         
         job_id = str(uuid.uuid4())
-        threading.Thread(target=background_summarize, args=(job_id, thread_url, "en")).start()
+        threading.Thread(target=background_summarize, args=(job_id, thread_url, "en", summary_length)).start()
         return redirect(url_for('loading', job_id=job_id))
     
-    return render_template("index.html", thread_url_val="")
+    return render_template("index.html", thread_url_val="", summary_length_val="medium", trending_threads=trending_threads)
 
 @app.route("/random_thread_url")
 def random_thread_url():
     """API endpoint to get a random trending Reddit thread URL."""
     url = get_random_trending_thread_url()
     return jsonify({"url": url})
+
+@app.route("/trending_threads")
+def trending_threads():
+    """API endpoint to get trending Reddit threads as JSON."""
+    threads = get_trending_threads(limit=5)
+    return jsonify({"threads": threads})
 
 @app.route("/loading/<job_id>")
 def loading(job_id):
@@ -420,6 +711,29 @@ def result(job_id):
 def test():
     """A simple test route to check if the app is running."""
     return "App is running!"
+
+@app.route("/status")
+def status():
+    """API endpoint to check the status of circuit breakers and services."""
+    # Count available API keys (mask them for security)
+    available_keys = len(GEMINI_API_KEYS)
+    masked_keys = []
+    for i, key in enumerate(GEMINI_API_KEYS):
+        if key:
+            masked_keys.append(f"Key {i+1}: {key[:8]}...{key[-4:]}")
+        else:
+            masked_keys.append(f"Key {i+1}: Not set")
+    
+    return jsonify({
+        'reddit_circuit_breaker': reddit_circuit_breaker.get_status(),
+        'gemini_circuit_breaker': gemini_circuit_breaker.get_status(),
+        'reddit_initialized': reddit is not None,
+        'gemini_api_keys': {
+            'total_available': available_keys,
+            'current_key_index': current_key_index,
+            'keys': masked_keys
+        }
+    })
 
 if __name__ == '__main__':
     app.run(debug=True)

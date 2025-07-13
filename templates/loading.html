@@ -4,12 +4,111 @@
     <meta charset="UTF-8">
     <title>Processing...</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { font-family: 'Roboto', Arial, sans-serif; background: #f6f7f8; }
-        .container { max-width: 500px; margin: 100px auto; background: #fff; padding: 2em; border-radius: 16px; box-shadow: 0 4px 24px #0002; text-align: center; }
+        html, body { 
+            font-family: 'Roboto', Arial, sans-serif; 
+            background: #f6f7f8; 
+            overflow: hidden;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+        .container { 
+            max-width: 500px; 
+            margin: 50px auto; 
+            background: #fff; 
+            padding: 2em; 
+            border-radius: 16px; 
+            box-shadow: 0 4px 24px #0002; 
+            text-align: center; 
+        }
         .spinner { margin: 2em auto; border: 6px solid #f3f3f3; border-top: 6px solid #0079d3; border-radius: 50%; width: 48px; height: 48px; animation: spin 1s linear infinite; }
         @keyframes spin { 100% { transform: rotate(360deg); } }
-        .fun-fact { margin-top: 2em; font-size: 1.1em; color: #0079d3; font-style: italic; min-height: 2.5em; display: flex; align-items: center; justify-content: center; }
+        .fun-fact { 
+            margin-top: 1.5em; 
+            font-size: 0.95em; 
+            color: #0079d3; 
+            font-style: italic; 
+            min-height: 2em; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 8px;
+            padding: 1em;
+            border-left: 3px solid #0079d3;
+            box-shadow: 0 2px 6px rgba(0, 121, 211, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .fun-fact::before {
+            content: '💡';
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 1em;
+            opacity: 0.7;
+        }
+        
+        .fun-fact-content {
+            margin-left: 2em;
+            text-align: center;
+            line-height: 1.3;
+            font-weight: 500;
+        }
+        
+        .fun-fact.fade-in {
+            animation: fadeInUp 0.6s ease-out;
+        }
+        
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .fun-fact.fade-out {
+            animation: fadeOutDown 0.4s ease-in;
+        }
+        
+        @keyframes fadeOutDown {
+            from {
+                opacity: 1;
+                transform: translateY(0);
+            }
+            to {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+        }
+        .footer { 
+            position: fixed; 
+            bottom: 0; 
+            left: 0; 
+            right: 0; 
+            background: #f8f9fa; 
+            text-align: center; 
+            padding: 10px; 
+            border-top: 1px solid #dee2e6;
+            font-size: 0.9em;
+            color: #6c757d;
+        }
+        @media (max-width: 600px) {
+            .container { max-width: 98vw; margin: 20px auto; padding: 1em 0.5em; border-radius: 10px; }
+            h1 { font-size: 1.3em; }
+            .spinner { width: 36px; height: 36px; border-width: 4px; }
+            .fun-fact { font-size: 1em; min-height: 2em; }
+            .progress { height: 1.1rem !important; }
+            .progress-bar { font-size: 0.9rem !important; }
+        }
     </style>
     <script>
     setInterval(function() {
@@ -23,9 +122,236 @@
 </head>
 <body>
     <div class="container">
-        <h1>Processing...</h1>
+        <h1 class="text-center mb-4">Processing...</h1>
         <div class="spinner"></div>
-        <p>This may take a few seconds for long threads.</p>
+        
+        <!-- Progress Steps -->
+        <div class="progress-steps mb-4">
+            <div class="step active" id="step-fetching">
+                <div class="step-icon">1</div>
+                <div class="step-text">Fetching Thread</div>
+            </div>
+            <div class="step" id="step-analyzing">
+                <div class="step-icon">2</div>
+                <div class="step-text">Analyzing Content</div>
+            </div>
+            <div class="step" id="step-summarizing">
+                <div class="step-icon">3</div>
+                <div class="step-text">Generating Summary</div>
+            </div>
+        </div>
+        
+        <div class="progress my-4" style="height: 1.5rem;">
+            <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 33%; font-size: 1rem;" id="progressBar">Step 1 of 3</div>
+        </div>
+        
+        <div class="text-center mb-3">
+            <button class="btn btn-outline-danger" onclick="cancelProcessing()">Cancel</button>
+        </div>
+        
+        <div class="fun-fact" id="fun-fact">
+            <div class="fun-fact-content">Did you know? Reddit was founded in 2005!</div>
+        </div>
     </div>
+    
+    <!-- Footer -->
+    <div class="footer">
+        Powered by Junaid
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+    let currentStep = 1;
+    let startTime = Date.now();
+    let cancelled = false;
+    
+    // Progress simulation
+    function updateProgress() {
+        if (cancelled) return;
+        
+        const progressBar = document.getElementById('progressBar');
+        
+        if (currentStep === 1) {
+            progressBar.style.width = '33%';
+            progressBar.textContent = 'Step 1 of 3';
+            document.getElementById('step-fetching').classList.add('active');
+        } else if (currentStep === 2) {
+            progressBar.style.width = '66%';
+            progressBar.textContent = 'Step 2 of 3';
+            document.getElementById('step-analyzing').classList.add('active');
+        } else if (currentStep === 3) {
+            progressBar.style.width = '100%';
+            progressBar.textContent = 'Step 3 of 3';
+            document.getElementById('step-summarizing').classList.add('active');
+        }
+    }
+    
+    function cancelProcessing() {
+        cancelled = true;
+        if (confirm('Are you sure you want to cancel? This will stop the processing.')) {
+            window.location.href = '/';
+        } else {
+            cancelled = false;
+        }
+    }
+    
+    // Simulate progress steps
+    setTimeout(() => {
+        if (!cancelled) {
+            currentStep = 2;
+            updateProgress();
+        }
+    }, 3000);
+    
+    setTimeout(() => {
+        if (!cancelled) {
+            currentStep = 3;
+            updateProgress();
+        }
+    }, 8000);
+    
+    // Check if result is ready
+    setInterval(function() {
+        if (cancelled) return;
+        
+        fetch("/result_ready/{{ job_id }}").then(r => r.json()).then(data => {
+            if (data.ready) {
+                window.location.href = "/result/{{ job_id }}";
+            }
+        });
+    }, 2000);
+    
+    // Initialize progress
+    updateProgress();
+    
+    // Fun facts rotation
+    const facts = [
+        "Did you know? Reddit was founded in 2005!",
+        "Reddit is sometimes called 'the front page of the internet.'",
+        "There are over 100,000 active subreddits!",
+        "The Reddit alien mascot is named 'Snoo'.",
+        "The most upvoted Reddit post ever is a photo of Mr. Rogers.",
+        "Reddit's logo was created in MS Paint!",
+        "AMA stands for 'Ask Me Anything'.",
+        "The first Reddit community was r/NSFW.",
+        "Reddit Gold is now called Reddit Premium.",
+        "Reddit was originally going to be called 'Snew'.",
+        "The first Reddit post was 'The Downing Street Memo'.",
+        "r/funny is one of the largest subreddits.",
+        "Reddit has its own secret holiday: 'Cake Day'.",
+        "The Reddit mascot, Snoo, was designed in a dorm room.",
+        "Reddit's upvote/downvote system inspired other platforms.",
+        "Reddit once had a button that only worked for 2 months!",
+        "Reddit's April Fools' events are legendary.",
+        "Reddit Premium removes ads and gives you coins.",
+        "Reddit's founders met at the University of Virginia.",
+        "Reddit's code was originally written in Lisp!"
+    ];
+    let i = 0;
+    
+    function updateFunFact() {
+        if (cancelled) return;
+        
+        const funFactElement = document.getElementById('fun-fact');
+        const funFactContent = funFactElement.querySelector('.fun-fact-content');
+        
+        // Add fade out animation
+        funFactElement.classList.add('fade-out');
+        
+        setTimeout(() => {
+            // Update content
+            funFactContent.textContent = facts[i % facts.length];
+            
+            // Remove fade out and add fade in
+            funFactElement.classList.remove('fade-out');
+            funFactElement.classList.add('fade-in');
+            
+            // Remove fade in class after animation completes
+            setTimeout(() => {
+                funFactElement.classList.remove('fade-in');
+            }, 600);
+            
+            i++;
+        }, 400);
+    }
+    
+    // Initial fun fact
+    updateFunFact();
+    
+    // Rotate fun facts every 4 seconds
+    setInterval(updateFunFact, 4000);
+    </script>
+    <style>
+        .progress-steps {
+            display: flex;
+            justify-content: space-between;
+            margin: 2rem 0;
+        }
+        
+        .step {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex: 1;
+            position: relative;
+        }
+        
+        .step:not(:last-child)::after {
+            content: '';
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            width: 100%;
+            height: 2px;
+            background: #e0e0e0;
+            z-index: 1;
+        }
+        
+        .step.active:not(:last-child)::after {
+            background: #0079d3;
+        }
+        
+        .step-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #e0e0e0;
+            color: #666;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            z-index: 2;
+            position: relative;
+        }
+        
+        .step.active .step-icon {
+            background: #0079d3;
+            color: white;
+        }
+        
+        .step-text {
+            margin-top: 0.5rem;
+            font-size: 0.9rem;
+            text-align: center;
+            color: #666;
+        }
+        
+        .step.active .step-text {
+            color: #0079d3;
+            font-weight: bold;
+        }
+        
+        @media (max-width: 600px) {
+            .progress-steps {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .step:not(:last-child)::after {
+                display: none;
+            }
+        }
+    </style>
 </body>
 </html>
