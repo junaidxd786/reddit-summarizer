@@ -18,8 +18,6 @@ from enum import Enum
 from datetime import datetime, timedelta
 import functools
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import asyncio
-import aiohttp
 
 load_dotenv()
 startup_start = time.time()
