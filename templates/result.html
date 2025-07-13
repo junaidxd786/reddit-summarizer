@@ -419,7 +419,6 @@
             </div>
         {% endif %}
 
-        {# Moved Action Items & Key Facts higher as they are core AI output #}
         {% if action_items_html %}
             <div class="card mb-4" id="action-items-section">
                 <div class="card-header">
@@ -431,21 +430,6 @@
                 </div>
                 <div class="card-body" id="action-items-section-content">
                     {{ action_items_html|safe }}
-                </div>
-            </div>
-        {% endif %}
-
-        {% if key_facts_html %}
-            <div class="card mb-4" id="key-facts-section">
-                <div class="card-header">
-                    <span>Key Facts</span>
-                    <button class="btn-copy" onclick="copySection('key-facts-section-content', this)">
-                        <i class="fas fa-copy"></i> Copy
-                        <span class="copy-tooltip">Copied!</span>
-                    </button>
-                </div>
-                <div class="card-body" id="key-facts-section-content">
-                    {{ key_facts_html|safe }}
                 </div>
             </div>
         {% endif %}
@@ -468,69 +452,6 @@
                                 <span class="comment-text">{{ comment }}</span>
                             </div>
                         </li>
-                    {% endfor %}
-                    </ul>
-                </div>
-            </div>
-        {% endif %}
-
-        <div class="card mb-4" id="links-section">
-            <div class="card-header">
-                <span>Important Links</span>
-                <button class="btn-copy" onclick="copySection('links-section-content', this)">
-                    <i class="fas fa-copy"></i> Copy
-                    <span class="copy-tooltip">Copied!</span>
-                </button>
-            </div>
-            <div class="card-body" id="links-section-content">
-            {% if result.links and result.links|length > 0 %}
-                <ul class="list-group list-group-flush">
-                    {% for link in result.links[:3] %}
-                        <li class="list-group-item"><a href="{{ link }}" target="_blank">{{ link }}</a></li>
-                    {% endfor %}
-                </ul>
-            {% else %}
-                <p class="mb-0 text-muted">No links found in the main post or top comments.</p>
-            {% endif %}
-            </div>
-        </div>
-
-        {% if result.faqs %}
-            <div class="card mb-4 faqs" id="faqs-section">
-                <div class="card-header">
-                    <span>Frequently Asked Questions</span>
-                    <button class="btn-copy" onclick="copySection('faqs-section-content', this)">
-                        <i class="fas fa-copy"></i> Copy
-                        <span class="copy-tooltip">Copied!</span>
-                    </button>
-                </div>
-                <div class="card-body" id="faqs-section-content">
-                        {% for question, score in result.faqs %}
-                        <div class="mb-3 d-flex align-items-start" style="padding: 0.7em 1em; background: #f8fafd; border-radius: 10px; border: 1.5px solid #e9ecef;">
-                            <span style="font-weight:700; color:#0079d3; min-width:2em; text-align:right; margin-right:0.8em;">{{ loop.index }}.</span>
-                            <span>{{ question }}</span>
-                        </div>
-                        {% endfor %}
-                    {% if result.faqs|length == 0 %}
-                        <div class="text-muted text-center">No FAQs found.</div>
-                    {% endif %}
-                </div>
-            </div>
-        {% endif %}
-
-        {% if result.expert_opinions %}
-            <div class="card mb-4 experts" id="experts-section">
-                <div class="card-header">
-                    <span>Expert Opinions</span>
-                    <button class="btn-copy" onclick="copySection('experts-section-content', this)">
-                        <i class="fas fa-copy"></i> Copy
-                        <span class="copy-tooltip">Copied!</span>
-                    </button>
-                </div>
-                <div class="card-body" id="experts-section-content">
-                    <ul class="list-group list-group-flush">
-                    {% for comment, score, flair in result.expert_opinions %}
-                        <li class="list-group-item"><span class="flair">[{{ flair }}]</span> <span class="score">▲ {{ score }}</span> {{ comment }}</li>
                     {% endfor %}
                     </ul>
                 </div>
@@ -563,15 +484,6 @@
                         <div class="comment-row">
                             <span class="upvote-badge"><i class="fas fa-arrow-up"></i> {{ score }}</span>
                             <span class="comment-text">{{ comment }}</span>
-                        </div>
-                    </li>
-                    {% set displayed = True %}
-                {% elif result.faqs and result.faqs|length > 0 %}
-                    {% set question, score = result.faqs[0] %}
-                    <li class="list-group-item" style="padding:0; border:none; background:none;">
-                        <div class="comment-row">
-                            <span class="upvote-badge" style="background:#f8e3fd;color:#8e44ad;border:2px solid #d1b3e7;"><i class="fas fa-question"></i> {{ score }}</span>
-                            <span class="comment-text">{{ question }}</span>
                         </div>
                     </li>
                     {% set displayed = True %}

@@ -17,6 +17,9 @@ import time
 from enum import Enum
 from datetime import datetime, timedelta
 import functools
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
+import aiohttp
 
 load_dotenv()
 startup_start = time.time()
@@ -440,152 +443,6 @@ JSON Output:
         logging.error(f"Unexpected error processing Gemini output: {e}")
         return {"summary": f"An unexpected error occurred: {e}", "action_items_notes": "", "key_facts": ""}, True
 
-
-def extract_links(texts):
-    """Extracts all URLs from a list of texts."""
-    url_pattern = re.compile(r'https?://\S+')
-    links = set()
-    for text in texts:
-        links.update(url_pattern.findall(text))
-    return sorted(list(links))
-
-def analyze_sentiment(comments):
-    """Analyzes the sentiment of comments and returns score, breakdown, and verdict."""
-    analyzer = get_sentiment_analyzer()
-    scores = [analyzer.polarity_scores(text[0])['compound'] for text in comments if text[0].strip()]
-    avg_score = sum(scores) / len(scores) if scores else 0
-    
-    # Breakdown
-    pos = sum(1 for s in scores if s > 0.15)
-    neg = sum(1 for s in scores if s < -0.15)
-    neu = len(scores) - pos - neg
-    total = len(scores) if scores else 1
-    breakdown = {
-        'positive': round(pos / total * 100, 1),
-        'neutral': round(neu / total * 100, 1),
-        'negative': round(neg / total * 100, 1)
-    }
-    
-    if avg_score > 0.15:
-        verdict = "Most people like this post. (Positive sentiment)"
-    elif avg_score < -0.15:
-        verdict = "Most people dislike this post. (Negative sentiment)"
-    else:
-        verdict = "The sentiment is mixed. (Neutral sentiment)"
-    
-    return {
-        'score': round(avg_score, 3),
-        'breakdown': breakdown,
-        'verdict': verdict
-    }
-
-def extract_faqs(comments, max_faqs=5):
-    """Extracts potential FAQs from comments based on questions and upvotes."""
-    questions = [(body, score) for body, score in comments if body.strip().endswith('?')]
-    top_questions = sorted(questions, key=lambda x: x[1], reverse=True)[:max_faqs]
-    return top_questions
-
-def extract_expert_opinions(thread_url, limit=50): # Reduced limit for consistency
-    """Extracts comments from users with specific 'expert' flairs."""
-    reddit = get_reddit()
-    if not reddit: # Check if PRAW was initialized
-        logging.error("Reddit PRAW not initialized, cannot extract expert opinions.")
-        return []
-    
-    def _extract_expert_opinions():
-        reddit = get_reddit()
-        if not reddit:
-            raise Exception("Reddit PRAW not initialized")
-        submission = reddit.submission(url=thread_url)
-        # Be careful with replace_more(limit=0) if it's the bottleneck
-        submission.comments.replace_more(limit=0)
-        
-        expert_keywords = ["expert", "phd", "dr", "professor", "official", "mod"] # Added 'mod'
-        expert_comments = []
-        
-        for comment in submission.comments.list()[:limit]: # Only process up to limit comments
-            if isinstance(comment, Comment):
-                flair = (getattr(comment.author_flair_text, 'lower', lambda: "")() if comment.author_flair_text else "")
-                if any(keyword in flair for keyword in expert_keywords):
-                    expert_comments.append((comment.body, getattr(comment, 'score', 0), flair))
-        
-        expert_comments = sorted(expert_comments, key=lambda x: x[1], reverse=True)
-        return expert_comments
-    
-    try:
-        return reddit_circuit_breaker.call(_extract_expert_opinions)
-    except Exception as e:
-        logging.error(f"Circuit breaker prevented Reddit API call for expert opinions: {e}")
-        return []
-
-def extract_funny_comments(comments, max_funny=3):
-    """Extracts comments likely intended to be funny."""
-    funny_keywords = ["lol", "funny", "hilarious", "lmao", "rofl", "haha", "xd", "lmfao", "hehe", "humor", "joke"]
-    funny_comments = [(body, score) for body, score in comments if any(kw in body.lower() for kw in funny_keywords)]
-    top_funny = sorted(funny_comments, key=lambda x: x[1], reverse=True)[:max_funny]
-    return top_funny
-
-def safe_truncate(text, max_chars=4000):
-    """Truncates text to a safe character limit."""
-    return text[:max_chars]
-
-def bullets_to_html(text):
-    """Converts a bulleted string or a list to an HTML unordered list, handling potential intro text."""
-    if not text:
-        return ""
-        
-    # If text is a list, treat each item as a bullet
-    if isinstance(text, list):
-        lines = [str(line).strip() for line in text if str(line).strip()]
-    else:
-        lines = [line.strip() for line in str(text).split('\n') if line.strip()]
-
-    html_content = []
-    in_list = False
-
-    for line in lines:
-        # Check for various bullet point formats
-        if (line.startswith('*') or line.startswith('-') or 
-            line.startswith('•') or line.startswith('·') or
-            line.startswith('‣') or line.startswith('◦') or
-            line.startswith('▪') or line.startswith('▫') or
-            line.startswith('○') or line.startswith('●') or
-            line.startswith('◆') or line.startswith('◇') or
-            line.startswith('■') or line.startswith('□') or
-            line.startswith('▶') or line.startswith('►') or
-            line.startswith('➤') or line.startswith('➜') or
-            line.startswith('→') or line.startswith('⇒') or
-            line.startswith('1.') or line.startswith('2.') or line.startswith('3.') or
-            line.startswith('4.') or line.startswith('5.') or line.startswith('6.') or
-            line.startswith('7.') or line.startswith('8.') or line.startswith('9.') or
-            line.startswith('10.') or line.startswith('11.') or line.startswith('12.') or
-            line.startswith('13.') or line.startswith('14.') or line.startswith('15.') or
-            line.startswith('16.') or line.startswith('17.') or line.startswith('18.') or
-            line.startswith('19.') or line.startswith('20.') or
-            line.startswith('1)') or line.startswith('2)') or line.startswith('3)') or
-            line.startswith('4)') or line.startswith('5)') or line.startswith('6)') or
-            line.startswith('7)') or line.startswith('8)') or line.startswith('9)') or
-            line.startswith('10)') or line.startswith('11)') or line.startswith('12)') or
-            line.startswith('13)') or line.startswith('14)') or line.startswith('15)') or
-            line.startswith('16)') or line.startswith('17)') or line.startswith('18)') or
-            line.startswith('19)') or line.startswith('20)')):
-            if not in_list:
-                html_content.append("<ul>")
-                in_list = True
-            # Remove the bullet character and any leading whitespace
-            clean_line = line.lstrip('*-•·‣◦▪▫○●◆◇■□▶►➤➜→⇒0123456789.() ')
-            html_content.append(f"<li>{clean_line}</li>")
-        else:
-            if in_list:
-                html_content.append("</ul>")
-                in_list = False
-            html_content.append(f"<p>{line}</p>")
-    
-    if in_list:
-        html_content.append("</ul>")
-
-    return "".join(html_content)
-
 # --- Progress tracking for loading screen ---
 PROCESSING_STEPS = [
     {'key': 'fetching', 'label': 'Fetching Thread'},
@@ -608,25 +465,84 @@ def set_progress(job_id, step_idx, extra_label=None):
         'progress': progress
     }, timeout=600)
 
-def get_trending_threads(limit=5):
+def safe_truncate(text, max_chars=4000):
+    """Truncates text to a safe character limit."""
+    return text[:max_chars]
+
+def analyze_sentiment(comments):
+    """Analyzes the sentiment of comments and returns score, breakdown, and verdict."""
+    analyzer = get_sentiment_analyzer()
+    scores = [analyzer.polarity_scores(text[0])['compound'] for text in comments if text[0].strip()]
+    avg_score = sum(scores) / len(scores) if scores else 0
+    # Breakdown
+    pos = sum(1 for s in scores if s > 0.15)
+    neg = sum(1 for s in scores if s < -0.15)
+    neu = len(scores) - pos - neg
+    total = len(scores) if scores else 1
+    breakdown = {
+        'positive': round(pos / total * 100, 1),
+        'neutral': round(neu / total * 100, 1),
+        'negative': round(neg / total * 100, 1)
+    }
+    if avg_score > 0.15:
+        verdict = "Most people like this post. (Positive sentiment)"
+    elif avg_score < -0.15:
+        verdict = "Most people dislike this post. (Negative sentiment)"
+    else:
+        verdict = "The sentiment is mixed. (Neutral sentiment)"
+    return {
+        'score': round(avg_score, 3),
+        'breakdown': breakdown,
+        'verdict': verdict
+    }
+
+def extract_faqs(comments, max_faqs=5):
+    """Extracts potential FAQs from comments based on questions and upvotes."""
+    questions = [(body, score) for body, score in comments if body.strip().endswith('?')]
+    top_questions = sorted(questions, key=lambda x: x[1], reverse=True)[:max_faqs]
+    return top_questions
+
+def extract_expert_opinions(thread_url, limit=50):
+    """Extracts comments from users with specific 'expert' flairs."""
     reddit = get_reddit()
     if not reddit:
-        logging.error("Reddit PRAW not initialized, cannot fetch trending threads.")
+        logging.error("Reddit PRAW not initialized, cannot extract expert opinions.")
         return []
-    def _fetch_trending_threads():
+    def _extract_expert_opinions():
         reddit = get_reddit()
         if not reddit:
             raise Exception("Reddit PRAW not initialized")
-        subreddit = reddit.subreddit("popular")
-        posts = [post for post in subreddit.hot(limit=25) if not post.stickied and post.num_comments > 5]
-        threads = [{'title': post.title, 'url': f"https://www.reddit.com{post.permalink}"} for post in posts[:limit]]
-        return threads
+        submission = reddit.submission(url=thread_url)
+        submission.comments.replace_more(limit=0)
+        expert_keywords = ["expert", "phd", "dr", "professor", "official", "mod"]
+        expert_comments = []
+        for comment in submission.comments.list()[:limit]:
+            if isinstance(comment, Comment):
+                flair = (getattr(comment.author_flair_text, 'lower', lambda: "")() if comment.author_flair_text else "")
+                if any(keyword in flair for keyword in expert_keywords):
+                    expert_comments.append((comment.body, getattr(comment, 'score', 0), flair))
+        expert_comments = sorted(expert_comments, key=lambda x: x[1], reverse=True)
+        return expert_comments
     try:
-        threads = reddit_circuit_breaker.call(_fetch_trending_threads)
-        return threads
+        return reddit_circuit_breaker.call(_extract_expert_opinions)
     except Exception as e:
-        logging.error(f"Error fetching trending threads: {e}")
+        logging.error(f"Circuit breaker prevented Reddit API call for expert opinions: {e}")
         return []
+
+def extract_funny_comments(comments, max_funny=3):
+    """Extracts comments likely intended to be funny."""
+    funny_keywords = ["lol", "funny", "hilarious", "lmao", "rofl", "haha", "xd", "lmfao", "hehe", "humor", "joke"]
+    funny_comments = [(body, score) for body, score in comments if any(kw in body.lower() for kw in funny_keywords)]
+    top_funny = sorted(funny_comments, key=lambda x: x[1], reverse=True)[:max_funny]
+    return top_funny
+
+def extract_links(texts):
+    """Extracts all URLs from a list of texts."""
+    url_pattern = re.compile(r'https?://\S+')
+    links = set()
+    for text in texts:
+        links.update(url_pattern.findall(text))
+    return sorted(list(links))
 
 def background_summarize(job_id, thread_url, language="en", summary_length="medium"):
     """Performs summarization and data extraction in a background thread."""
@@ -640,49 +556,49 @@ def background_summarize(job_id, thread_url, language="en", summary_length="medi
             cache.set(job_id, cached_result, timeout=600)
             set_progress(job_id, len(PROCESSING_STEPS)-1)  # Finalizing
             return
-
         post_text, comments = fetch_post_and_comments(thread_url, limit=5)  # Lowered from 20
         set_progress(job_id, 1)  # Analyzing Comments
-
         # Truncate the combined text BEFORE sending to LLM for all purposes
         combined_for_llm = safe_truncate(post_text + "\n\n" + "\n".join([c[0] for c in comments[:5]]), 4000)  # Use up to 5 comments, 4000 char limit
-
         set_progress(job_id, 2)  # Generating Summary
-        # Consolidated Gemini call
-        gemini_outputs, gemini_error = process_thread_with_gemini(combined_for_llm, language=language, summary_length=summary_length)
-
-        if gemini_error:
+        # Only call Gemini, sentiment, and funny comments in parallel
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {
+                'gemini': executor.submit(process_thread_with_gemini, combined_for_llm, language, summary_length),
+                'sentiment': executor.submit(analyze_sentiment, comments),
+                'funny_comments': executor.submit(extract_funny_comments, comments),
+            }
+            results = {}
+            errors = {}
+            for key, future in futures.items():
+                try:
+                    results[key] = future.result()
+                except Exception as e:
+                    logging.error(f"Error in parallel task {key}: {e}")
+                    errors[key] = str(e)
+        gemini_outputs, gemini_error = results.get('gemini', (None, True))
+        if gemini_error or not gemini_outputs:
             # Check if it's a circuit breaker error
-            if "circuit breaker" in gemini_outputs.get("summary", "").lower():
+            if gemini_outputs and "circuit breaker" in gemini_outputs.get("summary", "").lower():
                 error_msg = "Gemini API is temporarily unavailable due to rate limits or service issues. Please try again in a few minutes."
             else:
-                error_msg = gemini_outputs.get("summary", "An unknown error occurred during Gemini processing.")
+                error_msg = gemini_outputs.get("summary", "An unknown error occurred during Gemini processing.") if gemini_outputs else "An unknown error occurred during Gemini processing."
             cache.set(job_id, {'error': error_msg}, timeout=600)
             set_progress(job_id, len(PROCESSING_STEPS)-1)  # Finalizing
             return
-
         summary = gemini_outputs["summary"]
         action_items_notes = gemini_outputs["action_items_notes"]
         key_facts = gemini_outputs["key_facts"]
-
         set_progress(job_id, 3)  # Extracting Insights
         top_comments = sorted(comments, key=lambda x: x[1], reverse=True)[:3]
-        all_texts_for_links = [post_text] + [c[0] for c in comments]
-        links = extract_links(all_texts_for_links)
-        sentiment_result = analyze_sentiment(comments)
-        faqs = extract_faqs(comments)
-        expert_opinions = extract_expert_opinions(thread_url, limit=20) # Keep consistent limit
-        funny_comments = extract_funny_comments(comments)
-
+        sentiment_result = results.get('sentiment', {'verdict': '', 'score': 0, 'breakdown': {}})
+        funny_comments = results.get('funny_comments', [])
         result = {
             'summary': summary,
             'top_comments': top_comments or [],
-            'links': links or [],
             'sentiment_verdict': sentiment_result.get('verdict', ''),
             'sentiment_score': sentiment_result.get('score', 0),
             'sentiment_breakdown': sentiment_result.get('breakdown', {}),
-            'faqs': faqs or [],
-            'expert_opinions': expert_opinions or [],
             'funny_comments': funny_comments or [],
             'action_items_notes': action_items_notes,
             'key_facts': key_facts,
@@ -709,6 +625,26 @@ def background_summarize(job_id, thread_url, language="en", summary_length="medi
         logging.error(f"Error in background summarization for job {job_id} ({thread_url}): {e}", exc_info=True)
         cache.set(job_id, {'error': error_msg}, timeout=600)
         set_progress(job_id, len(PROCESSING_STEPS)-1)  # Finalizing
+
+def get_trending_threads(limit=5):
+    reddit = get_reddit()
+    if not reddit:
+        logging.error("Reddit PRAW not initialized, cannot fetch trending threads.")
+        return []
+    def _fetch_trending_threads():
+        reddit = get_reddit()
+        if not reddit:
+            raise Exception("Reddit PRAW not initialized")
+        subreddit = reddit.subreddit("popular")
+        posts = [post for post in subreddit.hot(limit=25) if not post.stickied and post.num_comments > 5]
+        threads = [{'title': post.title, 'url': f"https://www.reddit.com{post.permalink}"} for post in posts[:limit]]
+        return threads
+    try:
+        threads = reddit_circuit_breaker.call(_fetch_trending_threads)
+        return threads
+    except Exception as e:
+        logging.error(f"Error fetching trending threads: {e}")
+        return []
 
 def get_trending_subreddits(limit=5):
     """Fetches a list of trending subreddits."""
@@ -790,6 +726,58 @@ def result(job_id):
 
     return render_template("result.html", result=result,
                                   action_items_html=action_items_html, key_facts_html=key_facts_html)
+
+def bullets_to_html(text):
+    """Converts a bulleted string or a list to an HTML unordered list, handling potential intro text."""
+    if not text:
+        return ""
+    # If text is a list, treat each item as a bullet
+    if isinstance(text, list):
+        lines = [str(line).strip() for line in text if str(line).strip()]
+    else:
+        lines = [line.strip() for line in str(text).split('\n') if line.strip()]
+    html_content = []
+    in_list = False
+    for line in lines:
+        # Check for various bullet point formats
+        if (line.startswith('*') or line.startswith('-') or \
+            line.startswith('•') or line.startswith('·') or
+            line.startswith('‣') or line.startswith('◦') or
+            line.startswith('▪') or line.startswith('▫') or
+            line.startswith('○') or line.startswith('●') or
+            line.startswith('◆') or line.startswith('◇') or
+            line.startswith('■') or line.startswith('□') or
+            line.startswith('▶') or line.startswith('►') or
+            line.startswith('➤') or line.startswith('➜') or
+            line.startswith('→') or line.startswith('⇒') or
+            line.startswith('1.') or line.startswith('2.') or line.startswith('3.') or
+            line.startswith('4.') or line.startswith('5.') or line.startswith('6.') or
+            line.startswith('7.') or line.startswith('8.') or line.startswith('9.') or
+            line.startswith('10.') or line.startswith('11.') or line.startswith('12.') or
+            line.startswith('13.') or line.startswith('14.') or line.startswith('15.') or
+            line.startswith('16.') or line.startswith('17.') or line.startswith('18.') or
+            line.startswith('19.') or line.startswith('20.') or
+            line.startswith('1)') or line.startswith('2)') or line.startswith('3)') or
+            line.startswith('4)') or line.startswith('5)') or line.startswith('6)') or
+            line.startswith('7)') or line.startswith('8)') or line.startswith('9)') or
+            line.startswith('10)') or line.startswith('11)') or line.startswith('12)') or
+            line.startswith('13)') or line.startswith('14)') or line.startswith('15)') or
+            line.startswith('16)') or line.startswith('17)') or line.startswith('18)') or
+            line.startswith('19)') or line.startswith('20)')):
+            if not in_list:
+                html_content.append("<ul>")
+                in_list = True
+            # Remove the bullet character and any leading whitespace
+            clean_line = line.lstrip('*-•·‣◦▪▫○●◆◇■□▶►➤➜→⇒0123456789.() ')
+            html_content.append(f"<li>{clean_line}</li>")
+        else:
+            if in_list:
+                html_content.append("</ul>")
+                in_list = False
+            html_content.append(f"<p>{line}</p>")
+    if in_list:
+        html_content.append("</ul>")
+    return "".join(html_content)
 
 @app.route("/test")
 def test():
