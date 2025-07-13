@@ -173,22 +173,6 @@
             from { opacity: 1; transform: translateY(0); }
             to { opacity: 0; transform: translateY(-20px); }
         }
-        .cancel-btn {
-            margin-top: 2.2em;
-            font-size: 1.1em;
-            padding: 0.7em 2.2em;
-            border-radius: 10px;
-            font-weight: 600;
-            border: 2px solid #dc3545;
-            color: #dc3545;
-            background: transparent;
-            transition: all 0.3s cubic-bezier(.4,2,.3,1);
-        }
-        .cancel-btn:hover {
-            background: #dc3545;
-            color: #fff;
-            box-shadow: 0 2px 8px rgba(220, 53, 69, 0.13);
-        }
         .footer {
             position: fixed;
             bottom: 0;
@@ -252,14 +236,6 @@
             background: #2d2d2d;
             border-top-color: #555;
             color: #b0b0b0;
-        }
-        body.dark-theme .cancel-btn {
-            border-color: #dc3545;
-            color: #dc3545;
-        }
-        body.dark-theme .cancel-btn:hover {
-            background: #dc3545;
-            color: #fff;
         }
         @media (max-width: 700px) {
             .loading-glass { max-width: 98vw; padding: 1.2em 0.5em; }
@@ -325,13 +301,6 @@
                 white-space: normal;
                 min-width: 0;
             }
-            .cancel-btn {
-                width: 100%;
-                font-size: 1em;
-                padding: 0.7em 0.5em;
-                border-radius: 8px;
-                margin-top: 1.2em;
-            }
             .footer {
                 font-size: 0.85em;
                 padding: 0.7em 0.2em;
@@ -344,8 +313,12 @@
     </style>
 </head>
 <body>
-    <div class="loading-glass">
+    <div class="loading-glass" style="position:relative;">
         <div class="loading-title">Processing Reddit Thread...</div>
+        <div class="fun-fact-card" id="funFactCard">
+            <span class="fun-fact-icon" id="funFactIcon" style="font-size:1.5em; margin-right:1em; filter: drop-shadow(0 2px 8px #0079d3aa);">🧠</span>
+            <span class="fun-fact-text" id="funFactText" style="font-size:0.98em; font-weight:500; letter-spacing:0.01em;">Did you know? Reddit was founded in 2005!</span>
+        </div>
         <div class="section-progress">
             <div class="section-cards" id="sectionCards">
                 <div class="section-card" id="section-0">
@@ -373,11 +346,7 @@
                 <div class="progress-bar" id="progressBar" style="width: 5%;"></div>
             </div>
         </div>
-        <div class="fun-fact-card" id="funFactCard">
-            <span class="fun-fact-icon" id="funFactIcon" style="font-size:1.5em; margin-right:1em; filter: drop-shadow(0 2px 8px #0079d3aa);">🧠</span>
-            <span class="fun-fact-text" id="funFactText" style="font-size:0.98em; font-weight:500; letter-spacing:0.01em;">Did you know? Reddit was founded in 2005!</span>
-        </div>
-        <button class="cancel-btn" onclick="cancelProcessing()">Cancel</button>
+        <!-- Remove the Cancel button HTML -->
     </div>
     <div class="footer">
         Powered by Junaid
@@ -518,11 +487,7 @@
                 .catch(() => setTimeout(waitForResult, 700));
         }
     }
-    function cancelProcessing() {
-        if (confirm('Are you sure you want to cancel? This will stop the processing and return to the homepage.')) {
-            window.location.href = '/';
-        }
-    }
+    // Remove the cancelProcessing function
     </script>
 </body>
 </html>
