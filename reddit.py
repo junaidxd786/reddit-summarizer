@@ -92,6 +92,7 @@ gemini_circuit_breaker = CircuitBreaker(
 
 # Multiple Gemini API keys support
 GEMINI_API_KEYS = []
+
 primary_key = os.getenv("GEMINI_API_KEY")
 if primary_key:
     GEMINI_API_KEYS.append(primary_key)
@@ -167,14 +168,23 @@ def get_sentiment_analyzer():
 
 
 app = Flask(__name__)
-# Configure cache (SimpleCache for development, consider RedisCache for production)
-app.config['CACHE_TYPE'] = 'SimpleCache'
-# app.config['CACHE_TYPE'] = 'RedisCache' # Uncomment for Redis
-# app.config['CACHE_REDIS_HOST'] = 'localhost' # Configure for Redis
-# app.config['CACHE_REDIS_PORT'] = 6379 # Configure for Redis
-# app.config['CACHE_REDIS_DB'] = 0 # Configure for Redis
-cache = Cache(app) # Initialize cache with app config
-logging.info("Flask app and cache initialized.")
+# Try to use RedisCache, fallback to SimpleCache if Redis is unavailable
+try:
+    app.config['CACHE_TYPE'] = 'RedisCache'
+    app.config['CACHE_REDIS_HOST'] = 'localhost'  # Change if your Redis is elsewhere
+    app.config['CACHE_REDIS_PORT'] = 6379
+    app.config['CACHE_REDIS_DB'] = 0
+    app.config['CACHE_REDIS_URL'] = 'redis://localhost:6379/0'
+    cache = Cache(app)
+    # Test Redis connection
+    cache.set('test_redis', 'ok', timeout=5)
+    assert cache.get('test_redis') == 'ok'
+    logging.info("Flask app and Redis cache initialized.")
+except Exception as e:
+    logging.error(f"Redis cache unavailable, falling back to SimpleCache: {e}")
+    app.config['CACHE_TYPE'] = 'SimpleCache'
+    cache = Cache(app)
+    logging.info("Flask app and SimpleCache initialized.")
 
 # Set up error logging
 logging.basicConfig(filename='app_errors.log', level=logging.ERROR, format='%(asctime)s %(levelname)s:%(message)s')
