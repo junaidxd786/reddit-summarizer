@@ -18,6 +18,8 @@ from enum import Enum
 from datetime import datetime, timedelta
 import functools
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
+import httpx
 
 load_dotenv()
 startup_start = time.time()
@@ -187,7 +189,8 @@ except Exception as e:
     logging.info("Flask app and SimpleCache initialized.")
 
 # Set up error logging
-logging.basicConfig(filename='app_errors.log', level=logging.ERROR, format='%(asctime)s %(levelname)s:%(message)s')
+logging.basicConfig(filename=r'C:\Users\PMLS\OneDrive\Desktop\reddit\app_errors.log', level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
+logging.info("=== Logging test: App started ===")
 
 def remove_urls(text):
     """Removes URLs from the given text."""
@@ -219,94 +222,93 @@ def get_random_trending_thread_url():
         logging.error(f"Circuit breaker prevented Reddit API call: {e}")
     return None
 
-def fetch_post_and_comments(thread_url, limit=5, sort='top'):
-    """Fetches the main post text and the most relevant comments from a Reddit thread.
-    sort: 'top' (most upvoted), 'best', or 'controversial'"""
-    reddit = get_reddit()
-    if not reddit: # Check if PRAW was initialized
-        raise ValueError("Reddit PRAW not initialized, cannot fetch post and comments.")
-
-    def _fetch_post_and_comments():
-        reddit = get_reddit()
-        if not reddit:
-            raise Exception("Reddit PRAW not initialized")
-        import praw
-        from praw.models import Comment
-        submission = reddit.submission(url=thread_url)
-        # Set the comment sort order
-        if sort == 'best':
-            submission.comment_sort = 'best'
-        elif sort == 'controversial':
-            submission.comment_sort = 'controversial'
-        else:
-            submission.comment_sort = 'top'
-        # Only fetch one batch of 'more comments' for speed
-        submission.comments.replace_more(limit=1)
-        comments = []
-        for comment in submission.comments.list():
-            if isinstance(comment, Comment):
+# --- ASYNC REDDIT FETCHING ---
+async def fetch_post_and_comments_async(thread_url, limit=5, sort='top', max_depth=2):
+    import asyncpraw
+    t0 = time.time()
+    reddit = asyncpraw.Reddit(
+        client_id=REDDIT_CLIENT_ID,
+        client_secret=REDDIT_CLIENT_SECRET,
+        user_agent=REDDIT_USER_AGENT
+    )
+    submission = await reddit.submission(url=thread_url)
+    # Set the comment sort order BEFORE any comment fetching (fixes UserWarning)
+    if sort == 'best':
+        submission.comment_sort = 'best'
+    elif sort == 'controversial':
+        submission.comment_sort = 'controversial'
+    else:
+        submission.comment_sort = 'top'
+    # Now fetch comments
+    fetch_start = time.time()
+    await submission.comments.replace_more(limit=1)
+    fetch_time = time.time() - fetch_start
+    logging.info(f"[TIMING] (async) submission.comments.replace_more: {fetch_time:.2f}s for {thread_url}")
+    print(f"[TIMING] (async) submission.comments.replace_more: {fetch_time:.2f}s for {thread_url}")
+    comments = []
+    async def collect_comments(comment_forest, current_depth):
+        if current_depth > max_depth:
+            return
+        for comment in comment_forest:
+            if hasattr(comment, 'body'):
                 comments.append((comment.body, getattr(comment, 'score', 0)))
-        # Sort by score for 'top', otherwise keep order as returned by Reddit
-        if sort == 'top':
-            comments = sorted(comments, key=lambda x: x[1], reverse=True)[:limit]
-        else:
-            comments = comments[:limit]
-        post_text = submission.title + "\n\n" + (submission.selftext or "")
-        return post_text, comments
+            if hasattr(comment, 'replies') and current_depth < max_depth:
+                await collect_comments(comment.replies, current_depth + 1)
+    await collect_comments(submission.comments, 1)
+    if sort == 'top':
+        comments = sorted(comments, key=lambda x: x[1], reverse=True)[:limit]
+    else:
+        comments = comments[:limit]
+    post_text = submission.title + "\n\n" + (submission.selftext or "")
+    await reddit.close()
+    return post_text, comments
+
+# Patch the sync fetch_post_and_comments to use async version
+
+def fetch_post_and_comments(thread_url, limit=5, sort='top', max_depth=2):
+    """Fetches the main post text and the most relevant comments from a Reddit thread using asyncpraw, up to a max depth."""
     try:
-        return reddit_circuit_breaker.call(_fetch_post_and_comments)
+        total_fetch_start = time.time()
+        result = asyncio.run(fetch_post_and_comments_async(thread_url, limit, sort, max_depth))
+        total_fetch_time = time.time() - total_fetch_start
+        logging.info(f"[TIMING] (async) fetch_post_and_comments total: {total_fetch_time:.2f}s for {thread_url}")
+        print(f"[TIMING] (async) fetch_post_and_comments total: {total_fetch_time:.2f}s for {thread_url}")
+        return result
     except Exception as e:
-        logging.error(f"Circuit breaker prevented Reddit API call for {thread_url}: {e}")
+        logging.error(f"Async Reddit API call failed for {thread_url}: {e}")
         raise
 
-def gemini_api_process(text_prompt, model=GEMINI_CLI_MODEL, api_key=None):
-    """
-    Calls the Gemini API to process a text prompt and returns the output.
-    Supports multiple API keys with automatic rotation on rate limits.
-    """
+# --- ASYNC GEMINI API ---
+async def gemini_api_process_async(text_prompt, model=GEMINI_CLI_MODEL, api_key=None):
     if not api_key:
         api_key = get_next_gemini_key()
     if not api_key:
         return "Error: No Gemini API keys available.", True
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    headers = {"Content-Type": "application/json"}
+    data = {
+        "contents": [
+            {"parts": [{"text": text_prompt}]}
+        ]
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(url, headers=headers, json=data)
+    if response.status_code == 429 or response.status_code == 403:
+        error_text = response.text.lower()
+        if "quota" in error_text or "rate" in error_text or "limit" in error_text:
+            next_key = get_next_gemini_key()
+            if next_key and next_key != api_key:
+                logging.info(f"Rate limit hit with key {api_key[:10]}..., trying next key")
+                return await gemini_api_process_async(text_prompt, model, next_key)
+        else:
+            return f"All Gemini API keys have reached their limits. Please try again later.", True
+    if response.status_code != 200:
+        return f"Gemini API error: {response.text}", True
+    result = response.json()
+    text = result["candidates"][0]["content"]["parts"][0]["text"]
+    return text.strip(), False
 
-    def _call_gemini_api():
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": text_prompt}
-                    ]
-                }
-            ]
-        }
-
-        response = requests.post(url, headers=headers, json=data, timeout=60)
-        # Check for rate limit or quota exceeded
-        if response.status_code == 429 or response.status_code == 403:
-            error_text = response.text.lower()
-            if "quota" in error_text or "rate" in error_text or "limit" in error_text:
-                # Try with next API key
-                next_key = get_next_gemini_key()
-                if next_key and next_key != api_key:
-                    logging.info(f"Rate limit hit with key {api_key[:10]}..., trying next key")
-                    # Recursive call with next key
-                    return gemini_api_process(text_prompt, model, next_key)
-            else:
-                return f"All Gemini API keys have reached their limits. Please try again later.", True
-        if response.status_code != 200:
-            return f"Gemini API error: {response.text}", True
-        result = response.json()
-        # Extract the text from the response
-        text = result["candidates"][0]["content"]["parts"][0]["text"]
-        return text.strip(), False
-
-    try:
-        return gemini_circuit_breaker.call(_call_gemini_api)
-    except Exception as e:
-        logging.error(f"Circuit breaker prevented Gemini API call: {e}")
-        return f"Gemini API call failed due to circuit breaker: {e}", True
+# Utility to clean Gemini output
 
 def clean_gemini_output(output):
     """Removes common unwanted output from Gemini CLI."""
@@ -326,7 +328,6 @@ def extract_json_from_markdown(text):
     else:
         # If no code block, try to find JSON in the text
         json_str = text.strip()
-    
     # Try to fix common JSON formatting issues
     try:
         # First attempt: parse as-is
@@ -334,28 +335,24 @@ def extract_json_from_markdown(text):
         return json_str
     except json.JSONDecodeError as e:
         logging.warning(f"Initial JSON parsing failed: {e}")
-        
         # Second attempt: try to fix common issues
         try:
             # Remove any trailing commas before closing braces/brackets
-            fixed_json = re.sub(r',(\s*[}\]])', r'\1', json_str)
+            fixed_json = re.sub(r',\s*([}\]])', r'\1', json_str)
             # Fix missing quotes around keys
             fixed_json = re.sub(r'(\s*)(\w+)(\s*:)', r'\1"\2"\3', fixed_json)
             # Fix single quotes to double quotes
             fixed_json = fixed_json.replace("'", '"')
-            
             json.loads(fixed_json)
             return fixed_json
         except json.JSONDecodeError as e2:
             logging.warning(f"Fixed JSON parsing also failed: {e2}")
-            
             # Third attempt: try to extract just the content we need
             try:
                 # Try to extract summary, action_items_notes, and key_facts manually
                 summary_match = re.search(r'"summary"\s*:\s*"([^"]*(?:"[^"]*")*[^"]*)"', json_str, re.DOTALL)
                 action_items_match = re.search(r'"action_items_notes"\s*:\s*"([^"]*(?:"[^"]*")*[^"]*)"', json_str, re.DOTALL)
                 key_facts_match = re.search(r'"key_facts"\s*:\s*"([^"]*(?:"[^"]*")*[^"]*)"', json_str, re.DOTALL)
-                
                 if summary_match or action_items_match or key_facts_match:
                     manual_json = {
                         "summary": summary_match.group(1) if summary_match else "Summary not found.",
@@ -365,7 +362,6 @@ def extract_json_from_markdown(text):
                     return json.dumps(manual_json)
             except Exception as e3:
                 logging.error(f"Manual JSON extraction failed: {e3}")
-    
     # If all parsing attempts fail, return a fallback structure
     logging.error(f"All JSON parsing attempts failed. Raw output: {text[:500]}...")
     fallback_json = {
@@ -375,15 +371,10 @@ def extract_json_from_markdown(text):
     }
     return json.dumps(fallback_json)
 
-def process_thread_with_gemini(combined_text, language="en", summary_length="medium"):
-    """
-    Processes the entire thread using one Gemini API call to get summary,
-    action items, and key facts in a structured format.
-    """
+async def process_thread_with_gemini_async(combined_text, language="en", summary_length="medium"):
     model = os.getenv("GEMINI_CLI_MODEL", "gemini-2.5-pro")
     text_no_urls = remove_urls(combined_text)
     truncated_text = safe_truncate(text_no_urls, 8000)
-
     summary_directive = ""
     if summary_length == "short":
         summary_directive = "Provide a very brief (1-2 sentences) summary. Focus on the main idea and general consensus."
@@ -391,40 +382,36 @@ def process_thread_with_gemini(combined_text, language="en", summary_length="med
         summary_directive = "Provide a detailed (2-3 paragraphs) summary. Cover the main idea, key points, and range of opinions."
     else: # medium
         summary_directive = "Provide a concise summary (around 150 words). Focus on the main idea of the original post and briefly outline the general consensus or key differing opinions in comments."
-
     prompt = f"""
 As an AI assistant, analyze the following Reddit thread and provide the requested information in a VALID JSON format.
 The JSON object must have exactly these keys:
-- "summary": A plain English summary based on the length requested.
-- "action_items_notes": A bulleted list of 3-5 main action items and important notes. Use * or - for bullet points, one per line.
-- "key_facts": A bulleted list of 3-5 key facts. Use * or - for bullet points, one per line.
-
+- \"summary\": A plain English summary based on the length requested.
+- \"action_items_notes\": A bulleted list of 3-5 main action items and important notes. Use * or - for bullet points, one per line.
+- \"key_facts\": A bulleted list of 3-5 key facts. Use * or - for bullet points, one per line.
 IMPORTANT: Ensure the JSON is properly formatted with:
 - All strings properly quoted
 - No trailing commas
 - Valid JSON syntax
 - Proper escaping of quotes within strings
-
 Here is the Reddit Thread:
 ---
 {truncated_text}
 ---
-
 Instructions:
 1. Summary: {summary_directive}
 2. Action Items & Notes: List concise bullet points using * or - format, one per line.
 3. Key Facts: List concise bullet points using * or - format, one per line.
 4. Language: All output should be in {language} if possible, otherwise default to English.
 5. JSON Format: Return ONLY valid JSON, no additional text or markdown formatting.
-
 JSON Output:
 """
-
-    raw_result, is_error = gemini_api_process(prompt, model=model, api_key=GEMINI_API_KEY)
-
+    gemini_start = time.time()
+    raw_result, is_error = await gemini_api_process_async(prompt, model=model, api_key=GEMINI_API_KEY)
+    gemini_time = time.time() - gemini_start
+    logging.info(f"[TIMING] (async) Gemini API call: {gemini_time:.2f}s for prompt length {len(prompt)}")
+    print(f"[TIMING] (async) Gemini API call: {gemini_time:.2f}s for prompt length {len(prompt)}")
     if is_error:
         return {"summary": raw_result, "action_items_notes": "", "key_facts": ""}, True
-
     cleaned_result = clean_gemini_output(raw_result)
     json_str = extract_json_from_markdown(cleaned_result)
     try:
@@ -432,19 +419,14 @@ JSON Output:
         summary = parsed_output.get("summary", "Summary not found.")
         action_items_notes = parsed_output.get("action_items_notes", "No action items found.")
         key_facts = parsed_output.get("key_facts", "No key facts found.")
-
-        # Debug logging to see what format is being returned
-        logging.info(f"Action items format: {repr(action_items_notes[:200])}")
-        logging.info(f"Key facts format: {repr(key_facts[:200])}")
-        
+        logging.info(f"[TIMING] (async) process_thread_with_gemini: total {time.time() - gemini_start:.2f}s")
+        print(f"[TIMING] (async) process_thread_with_gemini: total {time.time() - gemini_start:.2f}s")
         return {"summary": summary, "action_items_notes": action_items_notes, "key_facts": key_facts}, False
     except json.JSONDecodeError as e:
         logging.error(f"Failed to parse JSON from Gemini output: {e}")
         logging.error(f"JSON string length: {len(json_str)}")
         logging.error(f"Raw output preview: {cleaned_result[:1000]}...")
         logging.error(f"Extracted JSON preview: {json_str[:1000]}...")
-        
-        # Try to provide a more helpful error message
         error_msg = f"Error parsing Gemini response: {e}. The AI response may have been malformed."
         return {"summary": error_msg, "action_items_notes": "", "key_facts": ""}, True
     except Exception as e:
@@ -554,6 +536,7 @@ def extract_links(texts):
 
 def background_summarize(job_id, thread_url, language="en", summary_length="medium"):
     """Performs summarization and data extraction in a background thread."""
+    job_start_time = time.time()
     try:
         set_progress(job_id, 0)  # Fetching Thread
         # Check cache first
@@ -561,30 +544,42 @@ def background_summarize(job_id, thread_url, language="en", summary_length="medi
         cached_result = cache.get(cache_key)
         if cached_result:
             logging.info(f"Using cached result for {thread_url}")
+            print(f"Using cached result for {thread_url}")
             cache.set(job_id, cached_result, timeout=600)
             set_progress(job_id, len(PROCESSING_STEPS)-1)  # Finalizing
+            logging.info(f"[TIMING] background_summarize: Used cache, total time: {time.time() - job_start_time:.2f}s")
+            print(f"[TIMING] background_summarize: Used cache, total time: {time.time() - job_start_time:.2f}s")
             return
+        reddit_fetch_start = time.time()
         post_text, comments = fetch_post_and_comments(thread_url, limit=5)  # Lowered from 20
+        reddit_fetch_time = time.time() - reddit_fetch_start
+        logging.info(f"[TIMING] Reddit fetch_post_and_comments: {reddit_fetch_time:.2f}s for {thread_url}")
+        print(f"[TIMING] Reddit fetch_post_and_comments: {reddit_fetch_time:.2f}s for {thread_url}")
         set_progress(job_id, 1)  # Analyzing Comments
         # Truncate the combined text BEFORE sending to LLM for all purposes
-        combined_for_llm = safe_truncate(post_text + "\n\n" + "\n".join([c[0] for c in comments[:5]]), 4000)  # Use up to 5 comments, 4000 char limit
+        combined_for_llm = safe_truncate(post_text + "\n\n" + "\n".join([c[0] for c in comments[:5]]), 2000)  # Use up to 5 comments, 2000 char limit
         set_progress(job_id, 2)  # Generating Summary
         # Only call Gemini, sentiment, and funny comments in parallel
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {
-                'gemini': executor.submit(process_thread_with_gemini, combined_for_llm, language, summary_length),
-                'sentiment': executor.submit(analyze_sentiment, comments),
-                'funny_comments': executor.submit(extract_funny_comments, comments),
-            }
-            results = {}
-            errors = {}
-            for key, future in futures.items():
-                try:
-                    results[key] = future.result()
-                except Exception as e:
-                    logging.error(f"Error in parallel task {key}: {e}")
-                    errors[key] = str(e)
-        gemini_outputs, gemini_error = results.get('gemini', (None, True))
+        # TODO: For even more parallelism, consider making Gemini API call async and using asyncio.gather
+        parallel_start = time.time()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        gemini_task = loop.create_task(process_thread_with_gemini_async(combined_for_llm, language, summary_length))
+        # Run sentiment and funny in thread executor, Gemini async
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            sentiment_future = executor.submit(analyze_sentiment, comments)
+            funny_future = executor.submit(extract_funny_comments, comments)
+            gemini_result, sentiment_result, funny_comments = loop.run_until_complete(asyncio.gather(
+                gemini_task,
+                loop.run_in_executor(executor, analyze_sentiment, comments),
+                loop.run_in_executor(executor, extract_funny_comments, comments)
+            ))
+        loop.close()
+        parallel_time = time.time() - parallel_start
+        logging.info(f"[TIMING] (async) Parallel Gemini/sentiment/funny: {parallel_time:.2f}s for {thread_url}")
+        print(f"[TIMING] (async) Parallel Gemini/sentiment/funny: {parallel_time:.2f}s for {thread_url}")
+        gemini_outputs, gemini_error = gemini_result
+        # sentiment_result and funny_comments are already set
         if gemini_error or not gemini_outputs:
             # Check if it's a circuit breaker error
             if gemini_outputs and "circuit breaker" in gemini_outputs.get("summary", "").lower():
@@ -593,14 +588,16 @@ def background_summarize(job_id, thread_url, language="en", summary_length="medi
                 error_msg = gemini_outputs.get("summary", "An unknown error occurred during Gemini processing.") if gemini_outputs else "An unknown error occurred during Gemini processing."
             cache.set(job_id, {'error': error_msg}, timeout=600)
             set_progress(job_id, len(PROCESSING_STEPS)-1)  # Finalizing
+            logging.info(f"[TIMING] background_summarize: Gemini error, total time: {time.time() - job_start_time:.2f}s")
+            print(f"[TIMING] background_summarize: Gemini error, total time: {time.time() - job_start_time:.2f}s")
             return
         summary = gemini_outputs["summary"]
         action_items_notes = gemini_outputs["action_items_notes"]
         key_facts = gemini_outputs["key_facts"]
         set_progress(job_id, 3)  # Extracting Insights
         top_comments = sorted(comments, key=lambda x: x[1], reverse=True)[:3]
-        sentiment_result = results.get('sentiment', {'verdict': '', 'score': 0, 'breakdown': {}})
-        funny_comments = results.get('funny_comments', [])
+        sentiment_result = sentiment_result
+        funny_comments = funny_comments
         result = {
             'summary': summary,
             'top_comments': top_comments or [],
@@ -613,14 +610,21 @@ def background_summarize(job_id, thread_url, language="en", summary_length="medi
             'thread_url': thread_url
         }
         # Cache the result for 1 hour
+        cache_set_start = time.time()
         cache.set(cache_key, result, timeout=3600)
         cache.set(job_id, result, timeout=600)
+        cache_set_time = time.time() - cache_set_start
         set_progress(job_id, 4)  # Finalizing
-        logging.info(f"Summarization job {job_id} completed successfully.")
+        logging.info(f"[TIMING] Cache set: {cache_set_time:.2f}s for {thread_url}")
+        print(f"[TIMING] Cache set: {cache_set_time:.2f}s for {thread_url}")
+        logging.info(f"[TIMING] background_summarize: Job {job_id} completed successfully in {time.time() - job_start_time:.2f}s for {thread_url}")
+        print(f"[TIMING] background_summarize: Job {job_id} completed successfully in {time.time() - job_start_time:.2f}s for {thread_url}")
     except ValueError as ve:
         logging.error(f"Configuration error for job {job_id}: {ve}", exc_info=True)
         cache.set(job_id, {'error': f"Configuration Error: {ve}"}, timeout=600)
         set_progress(job_id, len(PROCESSING_STEPS)-1)  # Finalizing
+        logging.info(f"[TIMING] background_summarize: ValueError, total time: {time.time() - job_start_time:.2f}s")
+        print(f"[TIMING] background_summarize: ValueError, total time: {time.time() - job_start_time:.2f}s")
     except Exception as e:
         # Check if it's a circuit breaker error
         if "circuit breaker" in str(e).lower():
@@ -633,6 +637,8 @@ def background_summarize(job_id, thread_url, language="en", summary_length="medi
         logging.error(f"Error in background summarization for job {job_id} ({thread_url}): {e}", exc_info=True)
         cache.set(job_id, {'error': error_msg}, timeout=600)
         set_progress(job_id, len(PROCESSING_STEPS)-1)  # Finalizing
+        logging.info(f"[TIMING] background_summarize: Exception, total time: {time.time() - job_start_time:.2f}s")
+        print(f"[TIMING] background_summarize: Exception, total time: {time.time() - job_start_time:.2f}s")
 
 def get_trending_threads(limit=5):
     reddit = get_reddit()

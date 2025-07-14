@@ -6,3 +6,6 @@ vaderSentiment
 flask-caching
 redis
 gunicorn
+waitress>=2.1.2
+asyncpraw
+httpx
